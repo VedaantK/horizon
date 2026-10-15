@@ -1,0 +1,9 @@
+[project]
+name = "concordance-hft"
+version = "0.1.0"
+description = "Isolated hftbacktest environment (pins numpy<2.3, conflicts with vectorbt)."
+requires-python = ">=3.13,<3.14"
+dependencies = ["hftbacktest==2.4.4", "pyarrow", "polars"]
+
+[tool.uv]
+package = false

@@ -1,0 +1,12 @@
+.venv/
+hft/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+lake/
+data/raw/
+*.parquet
+*.duckdb
+reports/
