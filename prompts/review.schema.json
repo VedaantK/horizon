@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "failure_modes", "proposals"],
+  "properties": {
+    "verdict": {"enum": ["keep_testing", "revise", "reject"]},
+    "failure_modes": {"type": "array", "items": {"type": "string"}},
+    "proposals": {
+      "type": "array", "maxItems": 3,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["hypothesis", "rule_change", "data_needed", "expected_benefit", "tradeoff", "refutation_test"],
+        "properties": {
+          "hypothesis": {"type": "string"},
+          "rule_change": {"type": "string", "description": "Exact change to the spec, precise enough to code."},
+          "data_needed": {"type": "string"},
+          "expected_benefit": {"type": "string"},
+          "tradeoff": {"type": "string"},
+          "refutation_test": {"type": "string"}
+        }
+      }
+    }
+  }
+}

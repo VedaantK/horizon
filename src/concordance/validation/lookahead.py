@@ -11,7 +11,7 @@ from dataclasses import replace
 import numpy as np
 
 from concordance.panel import MarketPanel, derive_prices
-from concordance.strategy import LookaheadError, Strategy, weight_schedule
+from concordance.strategy import LookaheadError, Strategy, build_schedule
 
 
 def truncate(panel: MarketPanel, last: int) -> MarketPanel:
@@ -25,18 +25,22 @@ def truncate(panel: MarketPanel, last: int) -> MarketPanel:
 
 def check_truncation_invariance(make_strategy: Callable[[MarketPanel], Strategy],
                                 panel: MarketPanel, cuts: int = 5, seed: int = 0) -> None:
-    """`make_strategy(panel)` must build a fresh strategy (it may inspect the panel it gets)."""
-    full_w, full_has = weight_schedule(make_strategy(panel), panel)
+    """`make_strategy(panel)` must build a fresh strategy (it may inspect the panel it gets).
+
+    Compares the whole schedule (targets and order levels), not just the weights."""
+    full = build_schedule(make_strategy(panel), panel).arrays()
     T = panel.shape[0]
     rng = np.random.default_rng(seed)
     for c in sorted(rng.choice(np.arange(2, T - 1), size=min(cuts, T - 3), replace=False)):
         p = truncate(panel, int(c))
-        w, has = weight_schedule(make_strategy(p), p)
+        part = build_schedule(make_strategy(p), p).arrays()
         # Rows 0..c of the truncated schedule = decisions taken at sessions < c.
-        if not (np.array_equal(has, full_has[: c + 1])
-                and np.allclose(w, full_w[: c + 1], rtol=0, atol=0)):
-            bad = np.flatnonzero((has != full_has[: c + 1])
-                                 | (w != full_w[: c + 1]).any(axis=1))[0]
-            raise LookaheadError(
-                f"decision executed at {panel.sessions[bad].date()} changes when data after "
-                f"{panel.sessions[c].date()} is removed: the strategy uses future data")
+        for name, a in part.items():
+            b = full[name][: c + 1]
+            same = (a == b) | (np.isnan(a) & np.isnan(b)) if a.dtype.kind == "f" else a == b
+            rows = same.reshape(len(same), -1).all(axis=1)
+            if not rows.all():
+                bad = int(np.flatnonzero(~rows)[0])
+                raise LookaheadError(
+                    f"{name} executed at {panel.sessions[bad].date()} changes when data after "
+                    f"{panel.sessions[c].date()} is removed: the strategy uses future data")

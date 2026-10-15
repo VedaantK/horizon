@@ -1,0 +1,266 @@
+{
+  "title": "StrategySpec",
+  "description": "A precise, testable trading strategy for Concordance (US equities, daily bars, long-only). Every rule must be unambiguous enough to code without guessing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "hypothesis",
+    "edge_rationale",
+    "universe",
+    "data_fields",
+    "signal",
+    "entry",
+    "exit",
+    "sizing",
+    "parameters",
+    "inferred_defaults",
+    "open_questions",
+    "refutation_test",
+    "unsupported"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,40}$"
+    },
+    "hypothesis": {
+      "type": "string",
+      "description": "What return pattern should exist."
+    },
+    "edge_rationale": {
+      "type": "string",
+      "description": "Why it could persist: who is on the other side and why."
+    },
+    "universe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "filters"
+      ],
+      "properties": {
+        "base": {
+          "const": "sp500",
+          "description": "S&P 500 members on the decision date (survivorship-free)."
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "e.g. 'raw close >= $5', 'market cap >= $2bn'"
+        }
+      }
+    },
+    "data_fields": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "enum": [
+          "tr_close",
+          "open",
+          "high",
+          "low",
+          "close",
+          "ret",
+          "retx",
+          "volume",
+          "bid",
+          "ask",
+          "shrout",
+          "mktcap_k",
+          "member"
+        ]
+      }
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition",
+        "decision_frequency",
+        "ranking"
+      ],
+      "properties": {
+        "definition": {
+          "type": "string",
+          "description": "Exact formula, with which price series (total-return or raw) and lookbacks in sessions."
+        },
+        "decision_frequency": {
+          "enum": [
+            "daily",
+            "weekly",
+            "monthly",
+            "event"
+          ]
+        },
+        "ranking": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "order_type",
+        "limit_price_rule",
+        "reentry_rule"
+      ],
+      "properties": {
+        "rule": {
+          "type": "string"
+        },
+        "order_type": {
+          "enum": [
+            "market_next_open",
+            "limit_next_session"
+          ]
+        },
+        "limit_price_rule": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Required for limit_next_session, e.g. 'decision close * (1 - 0.01)'."
+        },
+        "reentry_rule": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "exit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rules",
+        "stop_loss",
+        "take_profit",
+        "time_stop_sessions"
+      ],
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Signal exits, e.g. 'close above 5-day SMA'."
+        },
+        "stop_loss": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "e.g. '8% below entry' or 'raw close - 2 * ATR(14), trailing'."
+        },
+        "take_profit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "time_stop_sessions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      }
+    },
+    "sizing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "max_positions",
+        "gross_exposure"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "description": "e.g. 'equal weight 1/max_positions'."
+        },
+        "max_positions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "gross_exposure": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "default",
+          "min",
+          "max",
+          "why"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "default": {
+            "type": "number"
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          },
+          "why": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "inferred_defaults": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every choice the idea did not specify, labelled as inferred."
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Ambiguities that change the strategy materially. Non-empty means: ask the user before coding."
+    },
+    "refutation_test": {
+      "type": "string",
+      "description": "The result that would show the hypothesis is wrong."
+    },
+    "unsupported": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "description": "Parts of the idea Concordance cannot test yet (shorting, leverage, intraday, options, non-S&P stocks, fundamentals)."
+    }
+  }
+}

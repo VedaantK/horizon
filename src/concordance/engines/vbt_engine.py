@@ -1,9 +1,11 @@
 """vectorbt engine: vectorbt's own simulator does the fills, cash, positions and valuation.
 
 Sizing uses the shared planner, called inside vectorbt's pre-segment callback from
-vectorbt's own state (its cash, positions and forward-filled valuation prices). Orders are
-sent with `allow_partial=False, raise_reject=True`, so if vectorbt ever wanted to shrink or
-reject an order the run fails loudly instead of drifting.
+vectorbt's own state (its cash, positions and forward-filled valuation prices). vectorbt's
+flexible mode then executes the open orders and, after them, the intraday exits and limit
+buys the schedule says were reached. Orders are sent with `allow_partial=False,
+raise_reject=True`, so if vectorbt ever wanted to shrink or reject an order the run fails
+loudly instead of drifting.
 """
 
 from __future__ import annotations
@@ -15,68 +17,107 @@ from numba import njit
 from vectorbt.portfolio.enums import Direction, NoOrder, SizeType
 from vectorbt.portfolio.nb import order_nb
 
+from concordance.costs import ExecTables
 from concordance.panel import MarketPanel
-from concordance.planner import plan_orders
+from concordance.planner import plan_session
 from concordance.result import FILL_COLUMNS, BacktestResult
+from concordance.strategy import Schedule
 
 
 @njit
-def _pre_segment(c, exec_price, fee_rate, weights, has_weights, liquidate, scaled_out):
+def _pre_segment(c, exec_price, base_fee, weights, has_weights, hold, liquidate, gap_exit,
+                 stop, tp, entry_limit, exit_price, limit_filled, cap_buy, cap_sell, adv, sigma,
+                 impact_coef, max_impact, pending, scaled_out, log, log_n):
     i = c.i
     n = c.to_col - c.from_col
     pos = c.last_position[c.from_col:c.to_col].copy()
     mark_prev = c.last_val_price[c.from_col:c.to_col].copy()
-    delta, order, m, scaled = plan_orders(
-        c.last_cash[c.group], pos, exec_price[i], mark_prev, fee_rate[i],
-        weights[i], has_weights[i], liquidate[i])
+    exit_active = np.isfinite(stop[i]) | np.isfinite(tp[i])
+    (delta, rate, order, m, scaled, limit_qty, limit_rate, exit_qty, exit_rate,
+     new_pending) = plan_session(
+        c.last_cash[c.group], pos, pending, exec_price[i], mark_prev, base_fee[i],
+        weights[i], has_weights[i], hold[i], liquidate[i], gap_exit[i], entry_limit[i],
+        exit_active,
+        cap_buy[i], cap_sell[i], adv[i], sigma[i], impact_coef, max_impact)
     scaled_out[i] = scaled
-    # Call sequence: planned orders first (sells, then buys), then everything else.
-    used = np.zeros(n, dtype=np.bool_)
-    for k in range(m):
-        c.call_seq_now[k] = order[k]
-        used[order[k]] = True
-    k = m
+    pending[:] = new_pending
+
+    # Orders for this session in execution order: open (sells, buys), exits, limit buys.
+    cols = np.empty(3 * n, dtype=np.int64)
+    size = np.empty(3 * n)
+    price = np.empty(3 * n)
+    fee = np.empty(3 * n)
+    k = 0
+    for q in range(m):
+        j = order[q]
+        cols[k], size[k], price[k], fee[k] = j, delta[j], exec_price[i, j], rate[j]
+        log[log_n[0]] = 0
+        log_n[0] += 1
+        k += 1
     for j in range(n):
-        if not used[j]:
-            c.call_seq_now[k] = j
+        if np.isfinite(exit_price[i, j]):
+            pending[j] = 0.0  # the schedule closed this position
+            if exit_qty[j] > 0.0:
+                cols[k], size[k], price[k], fee[k] = j, -exit_qty[j], exit_price[i, j], \
+                    exit_rate[j]
+                log[log_n[0]] = 1
+                log_n[0] += 1
+                k += 1
+    for j in range(n):
+        if limit_filled[i, j] and limit_qty[j] > 0.0:
+            cols[k], size[k], price[k], fee[k] = j, limit_qty[j], entry_limit[i, j], \
+                limit_rate[j]
+            log[log_n[0]] = 1
+            log_n[0] += 1
             k += 1
-    return (delta,)
+    return (cols, size, price, fee, k)
 
 
 @njit
-def _order(c, delta, exec_price, fee_rate):
-    j = c.col - c.from_col
-    d = delta[j]
-    if d == 0.0:
-        return NoOrder
-    return order_nb(
-        size=d,
-        price=exec_price[c.i, c.col],
+def _flex_order(c, cols, size, price, fee, k):
+    if c.call_idx >= k:
+        return -1, NoOrder
+    return c.from_col + cols[c.call_idx], order_nb(
+        size=size[c.call_idx],
+        price=price[c.call_idx],
         size_type=SizeType.Amount,
         direction=Direction.LongOnly,
-        fees=fee_rate[c.i, c.col],
+        fees=fee[c.call_idx],
         allow_partial=False,
         raise_reject=True,
     )
 
 
-def run(panel: MarketPanel, weights: np.ndarray, has_weights: np.ndarray,
-        fee_rate: np.ndarray, init_cash: float) -> BacktestResult:
+def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
+        init_cash: float) -> BacktestResult:
     T, N = panel.shape
     close = pd.DataFrame(panel.tr_close, index=panel.sessions, columns=panel.assets)
-    exec_price = np.ascontiguousarray(panel.exec_price, dtype=np.float64)
-    fee = np.ascontiguousarray(fee_rate, dtype=np.float64)
-    w = np.ascontiguousarray(weights, dtype=np.float64)
-    has = np.ascontiguousarray(has_weights, dtype=np.bool_)
-    liq = np.ascontiguousarray(panel.liquidate, dtype=np.bool_)
+
+    def f64(a):
+        return np.ascontiguousarray(a, dtype=np.float64)
+
+    def b(a):
+        return np.ascontiguousarray(a, dtype=np.bool_)
+
     scaled_out = np.zeros(T, dtype=np.bool_)
+    # At most one open order per (session, asset), plus the intraday fills the schedule has.
+    max_orders = T * N + int(np.isfinite(sched.exit_price).sum() + sched.limit_filled.sum())
+    log = np.full(max_orders, -1, dtype=np.int64)
+    log_n = np.zeros(1, dtype=np.int64)
+    args = (f64(panel.exec_price), f64(tables.base_fee), f64(sched.weights), b(sched.has),
+            b(sched.hold), b(panel.liquidate), b(sched.gap_exit), f64(sched.stop),
+            f64(sched.take_profit), f64(sched.entry_limit), f64(sched.exit_price),
+            b(sched.limit_filled),
+            f64(tables.cap_buy), f64(tables.cap_sell), f64(tables.adv), f64(tables.sigma),
+            float(tables.impact_coef), float(tables.max_impact), np.zeros(N), scaled_out,
+            log, log_n)
 
     pf = vbt.Portfolio.from_order_func(
         close,
-        _order,
-        exec_price, fee,
+        _flex_order,
+        flexible=True,
         pre_segment_func_nb=_pre_segment,
-        pre_segment_args=(exec_price, fee, w, has, liq, scaled_out),
+        pre_segment_args=args,
         segment_mask=True,
         call_pre_segment=True,
         cash_sharing=True,
@@ -84,6 +125,7 @@ def run(panel: MarketPanel, weights: np.ndarray, has_weights: np.ndarray,
         init_cash=init_cash,
         ffill_val_price=True,
         update_value=True,
+        max_orders=max_orders,
         freq="1D",
     )
 
@@ -91,9 +133,15 @@ def run(panel: MarketPanel, weights: np.ndarray, has_weights: np.ndarray,
     cash = pf.cash().to_numpy(dtype=float)
     positions = pf.assets().to_numpy(dtype=float)
     rec = pf.orders.values
+    if len(rec) != log_n[0]:
+        raise RuntimeError(f"vectorbt recorded {len(rec)} orders, {log_n[0]} were sent")
+    # Records are in creation order within a session, so open fills precede intraday ones.
+    order = np.lexsort((np.arange(len(rec)), rec["idx"]))
+    rec = rec[order]
     side = np.where(rec["side"] == 0, 1.0, -1.0)
     fills = pd.DataFrame({
         "session": rec["idx"].astype(np.int64),
+        "phase": log[: log_n[0]][order],
         "asset": rec["col"].astype(np.int64),
         "qty": side * rec["size"],
         "price": rec["price"],

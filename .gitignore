@@ -10,3 +10,5 @@ data/raw/
 *.parquet
 *.duckdb
 reports/
+runs/
+candidates/

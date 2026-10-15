@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-FILL_COLUMNS = ["session", "asset", "qty", "price", "fee"]
+# phase 0 = at the open (rebalance, gap exits, liquidations); 1 = intraday (resting stop,
+# take-profit and limit orders). An asset has at most one fill per (session, phase).
+FILL_COLUMNS = ["session", "phase", "asset", "qty", "price", "fee"]
 
 
 @dataclass
@@ -44,6 +46,7 @@ class BacktestResult:
 
 def empty_fills() -> pd.DataFrame:
     return pd.DataFrame({
-        "session": pd.Series(dtype=np.int64), "asset": pd.Series(dtype=np.int64),
+        "session": pd.Series(dtype=np.int64), "phase": pd.Series(dtype=np.int64),
+        "asset": pd.Series(dtype=np.int64),
         "qty": pd.Series(dtype=float), "price": pd.Series(dtype=float),
         "fee": pd.Series(dtype=float)})

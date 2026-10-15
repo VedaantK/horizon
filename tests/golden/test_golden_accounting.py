@@ -19,7 +19,7 @@ ENGINES = list(ALL_ENGINES)
 def go(engine, rows, schedule, init_cash=1000.0, costs=ZERO_COST):
     panel = build_panel(long_frame(rows))
     w, has = weight_schedule(Fixed(schedule), panel)
-    return panel, run_engine(engine, panel, w, has, costs.fee_rates(panel), init_cash)
+    return panel, run_engine(engine, panel, (w, has), costs.fee_rates(panel), init_cash)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -118,7 +118,7 @@ def test_spread_cost_uses_prior_close_quote(engine):
     rates = CostModel(commission_bps=0).fee_rates(panel)
     assert rates[1, 0] == pytest.approx(0.001)
     w, has = weight_schedule(Fixed({0: {"A": 0.5}}), panel)
-    r = run_engine(engine, panel, w, has, rates, 1000.0)
+    r = run_engine(engine, panel, (w, has), rates, 1000.0)
     assert r.fills["fee"].iloc[0] == pytest.approx(5 * 100 * 0.001, abs=1e-12)
 
 

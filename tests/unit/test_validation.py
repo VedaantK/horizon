@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from conftest import long_frame, path
 
-from concordance.costs import ZERO_COST
+from concordance.costs import ZERO_COST, exec_tables
 from concordance.panel import build_panel
 from concordance.strategy import LookaheadError, Strategy, weight_schedule
 from concordance.validation.dsr import (
@@ -112,8 +112,8 @@ def test_truncation_invariance_catches_peeking():
 def test_placebo_is_reproducible_and_bounded():
     panel = _two_asset_panel()
     w, has = weight_schedule(_Honest(panel), panel)
-    fee = ZERO_COST.fee_rates(panel)
-    a = random_selection_placebo(panel, w, has, fee, n=30, seed=5)
-    b = random_selection_placebo(panel, w, has, fee, n=30, seed=5)
+    tables = exec_tables(panel, ZERO_COST)
+    a = random_selection_placebo(panel, w, has, tables, n=30, seed=5)
+    b = random_selection_placebo(panel, w, has, tables, n=30, seed=5)
     assert np.array_equal(a.placebo_sharpes, b.placebo_sharpes)
     assert 1 / 31 <= a.p_value <= 1.0

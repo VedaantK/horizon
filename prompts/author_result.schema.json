@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "strategy_file",
+    "name",
+    "params_json",
+    "assumptions",
+    "deviations_from_spec",
+    "validation_passed"
+  ],
+  "properties": {
+    "strategy_file": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "deviations_from_spec": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "validation_passed": {
+      "type": "boolean"
+    },
+    "params_json": {
+      "type": "string",
+      "description": "self.params as a JSON object string"
+    }
+  }
+}

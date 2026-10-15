@@ -219,7 +219,7 @@ def test_listing_gaps_and_failures(raw_dir, tmp_path):
 
     out = run(panel, EqualWeightMembers(), CostModel(commission_bps=1), init_cash=1e6)
     assert out.report.ok, out.report.summary()
-    from concordance.cli import listing_gap_exits
+    from concordance.api import listing_gap_exits
     ex = listing_gap_exits(panel, out.results["reference"])
     assert list(ex["permno"]) == [10005] and ex["date"].iloc[0] == SESS[31].date()
 
@@ -308,7 +308,7 @@ def test_gap_exit_valued_with_crsp_delisting_return(raw_dir, tmp_path):
     assert panel.liquidate[32, j] and panel.exec_price[32, j] == panel.tr_close[31, j]
     out = run(panel, EqualWeightMembers(), CostModel(commission_bps=1), init_cash=1e6)
     assert out.report.ok, out.report.summary()
-    from concordance.cli import listing_gap_exits
+    from concordance.api import listing_gap_exits
     assert listing_gap_exits(panel, out.results["reference"]).empty  # exit value is known
     fills = out.results["reference"].fills
     sold = fills[(fills.session == 32) & (fills.asset == j)]

@@ -1,12 +1,19 @@
-"""Transaction cost model, expressed as a per-(session, asset) fee rate on traded notional."""
+"""Transaction costs and liquidity limits.
+
+`CostModel` gives a per-(session, asset) fee rate on traded notional (commission + half
+spread). `LiquidityModel` adds a volume cap and a square-root market-impact charge, both
+measured against average daily volume from sessions *before* the trade. `exec_tables`
+combines them into the arrays every engine reads. See docs/SEMANTICS.md.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 
-from concordance.panel import MarketPanel
+from concordance.panel import MarketPanel, PanelError
 
 
 @dataclass(frozen=True)
@@ -35,3 +42,72 @@ class CostModel:
 
 ZERO_COST = CostModel(commission_bps=0.0, use_prior_quoted_spread=False,
                       default_half_spread_bps=0.0)
+
+
+@dataclass(frozen=True)
+class LiquidityModel:
+    """Volume cap and market impact.
+
+    participation   max shares traded per asset per session, as a fraction of ADV
+    impact_coef     impact rate = impact_coef * daily_vol * sqrt(shares / ADV)
+                    (square-root law; 1.0 is at the conservative end of published estimates)
+    max_impact_bps  ceiling on the impact rate; also charged when ADV is unknown
+    window/min_obs  trailing sessions for ADV and daily volatility, and the observations
+                    required before they count as known
+    """
+
+    participation: float = 0.10
+    impact_coef: float = 1.0
+    max_impact_bps: float = 500.0
+    window: int = 20
+    min_obs: int = 10
+
+
+@dataclass(frozen=True)
+class ExecTables:
+    base_fee: np.ndarray  # (T, N) commission + half spread (0 on forced liquidations)
+    cap_buy: np.ndarray  # (T, N) max shares bought per session (inf = no cap, 0 = blocked)
+    cap_sell: np.ndarray  # (T, N) max shares sold per session by rebalancing (inf = no cap)
+    adv: np.ndarray  # (T, N) ADV in total-return shares, NaN if unknown
+    sigma: np.ndarray  # (T, N) daily return volatility, NaN if unknown
+    impact_coef: float = 0.0
+    max_impact: float = 0.0  # as a rate, not bps
+
+    @property
+    def has_liquidity(self) -> bool:
+        return self.impact_coef > 0 or self.max_impact > 0 or bool(
+            np.isfinite(self.cap_buy).any() or np.isfinite(self.cap_sell).any())
+
+
+def trailing_liquidity(panel: MarketPanel, window: int, min_obs: int):
+    """(adv, sigma) known before the open of each session: rows i use sessions < i.
+
+    Volume is converted to total-return shares (raw shares * raw close / tr_close), so a
+    split does not change the measured liquidity.
+    """
+    if "volume" not in panel.fields:
+        raise PanelError("the liquidity model needs a 'volume' field in the panel")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        tr_shares = panel["volume"] * panel["close"] / panel.tr_close
+    roll = dict(window=window, min_periods=min_obs)
+    adv = pd.DataFrame(tr_shares).rolling(**roll).mean().shift(1).to_numpy()
+    sigma = pd.DataFrame(panel["ret"]).rolling(**roll).std(ddof=1).shift(1).to_numpy()
+    return adv, sigma
+
+
+def exec_tables(panel: MarketPanel, costs: CostModel | None = None,
+                liquidity: LiquidityModel | None = None) -> ExecTables:
+    costs = costs or CostModel()
+    base = costs.fee_rates(panel)
+    T, N = panel.shape
+    inf = np.full((T, N), np.inf)
+    if liquidity is None:
+        nan = np.full((T, N), np.nan)
+        return ExecTables(base, inf, inf.copy(), nan, nan.copy())
+    adv, sigma = trailing_liquidity(panel, liquidity.window, liquidity.min_obs)
+    cap = liquidity.participation * adv
+    known = np.isfinite(cap)
+    cap_buy = np.where(known, cap, 0.0)  # no volume history: cannot size a buy, so none
+    cap_sell = np.where(known, cap, np.inf)  # but an exit is never blocked
+    return ExecTables(base, cap_buy, cap_sell, adv, sigma, liquidity.impact_coef,
+                      liquidity.max_impact_bps / 1e4)

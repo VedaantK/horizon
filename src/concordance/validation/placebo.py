@@ -14,8 +14,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from concordance.costs import ExecTables
 from concordance.engines import reference
 from concordance.panel import MarketPanel
+from concordance.strategy import Schedule
 
 
 @dataclass(frozen=True)
@@ -32,9 +34,16 @@ def _sharpe(equity: np.ndarray) -> float:
 
 
 def random_selection_placebo(panel: MarketPanel, weights: np.ndarray, has: np.ndarray,
-                             fee_rate: np.ndarray, init_cash: float = 1e6,
+                             tables: ExecTables, init_cash: float = 1e6,
                              n: int = 300, seed: int = 0) -> PlaceboResult:
-    real = reference.run(panel, weights, has, fee_rate, init_cash, compiled=True)
+    """Weights only: stop-loss, take-profit and limit orders are not replayed (they belong
+    to the names the strategy chose). The real run is re-done the same way, so both sides
+    of the comparison ignore them."""
+    def go(w):
+        return reference.run(panel, Schedule.from_weights(w, has), tables, init_cash,
+                             compiled=True)
+
+    real = go(weights)
     rng = np.random.default_rng(seed)
     T, N = panel.shape
     # Eligible on the decision session (execution row i was decided at i - 1).
@@ -51,8 +60,7 @@ def random_selection_placebo(panel: MarketPanel, weights: np.ndarray, has: np.nd
                 continue
             pick = rng.choice(pool, size=min(held, len(pool)), replace=False)
             w[i, pick] = weights[i].sum() / len(pick)
-        sharpes[k] = _sharpe(
-            reference.run(panel, w, has, fee_rate, init_cash, compiled=True).equity)
+        sharpes[k] = _sharpe(go(w).equity)
     s = _sharpe(real.equity)
     p = (1 + int((sharpes >= s).sum())) / (1 + n)
     return PlaceboResult(s, sharpes, p)

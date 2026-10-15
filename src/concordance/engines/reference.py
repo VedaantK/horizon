@@ -11,21 +11,24 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from concordance.costs import ExecTables
 from concordance.panel import MarketPanel
-from concordance.planner import plan_orders
+from concordance.planner import plan_session
 from concordance.result import FILL_COLUMNS, BacktestResult
+from concordance.strategy import Schedule
 
-_plan = plan_orders.py_func  # pure Python: independent of the numba compilation
+_plan = plan_session.py_func  # pure Python: independent of the numba compilation
 
 
-def run(panel: MarketPanel, weights: np.ndarray, has_weights: np.ndarray,
-        fee_rate: np.ndarray, init_cash: float, compiled: bool = False) -> BacktestResult:
+def run(panel: MarketPanel, sched: Schedule, tables: ExecTables, init_cash: float,
+        compiled: bool = False) -> BacktestResult:
     """`compiled=True` uses the numba planner (same rule, much faster) for statistical
     re-runs such as the placebo. Reconciliation always uses the pure-Python planner."""
-    plan = plan_orders if compiled else _plan
+    plan = plan_session if compiled else _plan
     T, N = panel.shape
     cash = float(init_cash)
     pos = np.zeros(N)
+    pending = np.zeros(N)
     last_val = np.full(N, np.nan)  # last known valuation price per asset
 
     equity = np.empty(T)
@@ -34,27 +37,39 @@ def run(panel: MarketPanel, weights: np.ndarray, has_weights: np.ndarray,
     fills: list[tuple] = []
     scaled: list[int] = []
 
+    def trade(i, phase, j, qty, price, rate):
+        nonlocal cash
+        notional = abs(qty) * price
+        fee = notional * rate
+        cash += -(notional + fee) if qty > 0 else notional - fee
+        if cash < 0:
+            raise AssertionError(f"cash went negative at session {i}: {cash}")
+        pos[j] += qty
+        fills.append((i, phase, j, qty, price, fee))
+
     for i in range(T):
         # --- open: plan and execute -------------------------------------------------
-        delta, order, m, was_scaled = plan(
-            cash, pos, panel.exec_price[i], last_val, fee_rate[i],
-            weights[i], bool(has_weights[i]), panel.liquidate[i])
+        exit_active = np.isfinite(sched.stop[i]) | np.isfinite(sched.take_profit[i])
+        (delta, rate, order, m, was_scaled, limit_qty, limit_rate, exit_qty, exit_rate,
+         pending) = plan(
+            cash, pos, pending, panel.exec_price[i], last_val, tables.base_fee[i],
+            sched.weights[i], bool(sched.has[i]), sched.hold[i], panel.liquidate[i],
+            sched.gap_exit[i],
+            sched.entry_limit[i], exit_active, tables.cap_buy[i], tables.cap_sell[i],
+            tables.adv[i], tables.sigma[i], tables.impact_coef, tables.max_impact)
         if was_scaled:
             scaled.append(i)
         for k in range(m):
             j = order[k]
-            qty = delta[j]
-            price = panel.exec_price[i, j]
-            notional = abs(qty) * price
-            fee = notional * fee_rate[i, j]
-            if qty > 0:
-                cash -= notional + fee
-            else:
-                cash += notional - fee
-            if cash < 0:
-                raise AssertionError(f"cash went negative at session {i}: {cash}")
-            pos[j] += qty
-            fills.append((i, j, qty, price, fee))
+            trade(i, 0, j, delta[j], panel.exec_price[i, j], rate[j])
+
+        # --- intraday: resting exits, then resting limit buys (cash already reserved) --
+        for j in np.flatnonzero(np.isfinite(sched.exit_price[i])):
+            pending[j] = 0.0  # the schedule closed this position
+            if exit_qty[j] > 0:
+                trade(i, 1, j, -exit_qty[j], sched.exit_price[i, j], exit_rate[j])
+        for j in np.flatnonzero(sched.limit_filled[i] & (limit_qty > 0)):
+            trade(i, 1, j, limit_qty[j], sched.entry_limit[i, j], limit_rate[j])
 
         # --- close: mark to market ---------------------------------------------------
         close_px = panel.tr_close[i]
@@ -68,6 +83,6 @@ def run(panel: MarketPanel, weights: np.ndarray, has_weights: np.ndarray,
         pos_hist[i] = pos
 
     fills_df = pd.DataFrame(fills, columns=FILL_COLUMNS).astype(
-        {"session": np.int64, "asset": np.int64})
+        {"session": np.int64, "phase": np.int64, "asset": np.int64})
     return BacktestResult("reference", panel.sessions, panel.assets, equity, cash_hist,
                           pos_hist, fills_df, scaled)

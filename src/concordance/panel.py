@@ -17,7 +17,7 @@ QTY_DECIMALS = 6
 
 # Fields a long frame may carry; only date/asset/open/close/ret are required.
 REQUIRED = ("date", "asset", "open", "close", "ret")
-OPTIONAL_FLOAT = ("high", "low", "volume", "bid", "ask", "retx", "mktcap", "shrout")
+OPTIONAL_FLOAT = ("high", "low", "volume", "bid", "ask", "retx", "mktcap_k", "shrout")
 
 
 class PanelError(ValueError):

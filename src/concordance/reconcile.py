@@ -55,15 +55,18 @@ def _compare(a: BacktestResult, b: BacktestResult) -> PairCheck:
     chk = PairCheck(engine=b.engine, against=a.engine, n_fills=len(a.fills))
     sessions = a.sessions
 
-    fa = a.fills.sort_values(["session", "asset"]).reset_index(drop=True)
-    fb = b.fills.sort_values(["session", "asset"]).reset_index(drop=True)
-    m = fa.merge(fb, on=["session", "asset"], how="outer", suffixes=("_a", "_b"),
-                 indicator=True)
+    key = ["session", "phase", "asset"]
+    for f, e in ((a.fills, a.engine), (b.fills, b.engine)):
+        if f.duplicated(key).any():
+            chk.problems.append(f"{e} has two fills for one (session, phase, asset)")
+    fa = a.fills.sort_values(key).reset_index(drop=True)
+    fb = b.fills.sort_values(key).reset_index(drop=True)
+    m = fa.merge(fb, on=key, how="outer", suffixes=("_a", "_b"), indicator=True)
     only = m[m["_merge"] != "both"]
     for _, r in only.head(10).iterrows():
         side = a.engine if r["_merge"] == "left_only" else b.engine
         chk.problems.append(f"fill only in {side}: {sessions[int(r['session'])].date()} "
-                            f"asset={a.assets[int(r['asset'])]}")
+                            f"phase={int(r['phase'])} asset={a.assets[int(r['asset'])]}")
     both = m[m["_merge"] == "both"]
     dq = (both["qty_a"] - both["qty_b"]).abs()
     for _, r in both[dq > QTY_TOL].head(10).iterrows():
