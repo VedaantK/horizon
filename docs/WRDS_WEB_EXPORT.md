@@ -103,9 +103,12 @@ Ingest prints a summary of every file. If it reports a missing or renamed column
 message to Claude. It lists the columns it found, so the schema can be adjusted in a minute.
 
 ## Query 6: CRSP delisting returns — save as `crsp_delist_<years>.csv`
-Values the 18 listing gaps (see `lake/manifest.json`); 3 began while the stock was an S&P
-member (HealthSouth 2003, Comverse 2007, Washington Mutual 2008). Ingest also re-checks that
-every final delisting return is already in the daily file.
+Ingest checks that every final delisting return is already in the daily file (622 of 622
+on the 1994–2025 export). The v2 table records only a stock's final delisting, so it does not
+value the 18 temporary listing gaps (3 began while the stock was an S&P member: HealthSouth
+2003, Comverse 2007, Washington Mutual 2008). Those exits stay at the last price, and
+`concordance run` warns if a strategy held one. A delisting record dated inside a gap is used
+if one ever appears (e.g. from the legacy file).
 
 **Menu:** CRSP → Stock (v2) → **Delisting information** (the legacy Annual Update form with
 `DLSTDT`, `DLRET` works too)
@@ -137,6 +140,6 @@ every final delisting return is already in the daily file.
 - [x] `crsp_daily_*.csv.gz`
 - [x] `ff_factors_daily.csv.gz`
 - [x] `crsp_delist_2020_2025.csv.gz`
-- [ ] `crsp_delist_1990_2019.csv` (Query 6 again, for the pre-2020 gaps)
+- [x] `crsp_delist_1990_2019.csv.gz`
 - [ ] `ccm_link.csv` (optional; may be unavailable)
 - [ ] `comp_fundq.csv` (optional for now)
