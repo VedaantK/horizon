@@ -152,10 +152,12 @@ def load_sp500_panel(start, end, lake: Path | None = None, warmup_sessions: int 
         FROM read_parquet('{path}') d JOIN ids USING (permno)
         WHERE d.date BETWEEN ? AND ? ORDER BY d.permno, d.date
     """, [lo, hi]).df()
+    known = "d.gap_exit_known" if "gap_exit_known" in available else "false"
     relist = (con.execute(f"""
-        SELECT d.permno, d.date FROM read_parquet('{path}') d JOIN ids USING (permno)
-        WHERE d.relist""").df() if "relist" in available
-              else pd.DataFrame(columns=["permno", "date"]))
+        SELECT d.permno, d.date, {known} AS gap_exit_known
+        FROM read_parquet('{path}') d JOIN ids USING (permno) WHERE d.relist""").df()
+              if "relist" in available
+              else pd.DataFrame(columns=["permno", "date", "gap_exit_known"]))
     con.close()
 
     long["date"] = pd.to_datetime(long["date"])

@@ -278,3 +278,38 @@ def test_run_ledger_follows_lake(raw_dir, tmp_path, monkeypatch):
           "--program", "t"])
     assert (lake / "ledger" / "t" / "trials.jsonl").exists()
     assert not (home_lake / "ledger").exists()
+
+
+def test_gap_exit_valued_with_crsp_delisting_return(raw_dir, tmp_path):
+    _real_data_cases(raw_dir)
+    # v2 stkdelists layout, as the WRDS web form exports it.
+    pd.DataFrame({
+        "delactiontype": ["GDR", "MER"],
+        "permno": [10005, 10002],
+        "delistingdt": [str(SESS[30].date()), str(SESS[40].date())],
+        "delret": [-0.6, -0.45],  # 10005 went dark: worth 60% less off-exchange
+        "delnextprc": [np.nan, np.nan],
+    }).to_csv(raw_dir / "crsp_delist.csv", index=False)
+    lake = tmp_path / "lake"
+    man = ingest(raw_dir, lake)["files"]
+    assert man["crsp_delist"]["rows"] == 2
+    c = man["crsp_daily"]
+    assert c["gap_exits_from_delistings"] == [
+        {"permno": 10005, "last_priced": str(SESS[30].date()), "relisted": str(SESS[46].date()),
+         "date": str(SESS[31].date()), "ret": -0.6, "source": "delret"}]
+    assert c["gap_exits_unknown"] == []
+    # 10002's final row already carries its -45% delisting return, as CIZ data does.
+    assert c["delisting_return_check"] == {"checked": 1, "mismatches": []}
+
+    panel = load_sp500_panel(SESS[0], SESS[-1], lake=lake)
+    j = list(panel.assets).index(10005)
+    # The listing ends one session later at 40% of its last value; sold at the next open.
+    assert panel.tr_close[31, j] == pytest.approx(panel.tr_close[30, j] * 0.4)
+    assert panel.liquidate[32, j] and panel.exec_price[32, j] == panel.tr_close[31, j]
+    out = run(panel, EqualWeightMembers(), CostModel(commission_bps=1), init_cash=1e6)
+    assert out.report.ok, out.report.summary()
+    from concordance.cli import listing_gap_exits
+    assert listing_gap_exits(panel, out.results["reference"]).empty  # exit value is known
+    fills = out.results["reference"].fills
+    sold = fills[(fills.session == 32) & (fills.asset == j)]
+    assert len(sold) == 1 and sold["price"].iloc[0] == panel.tr_close[31, j]

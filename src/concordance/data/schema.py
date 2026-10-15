@@ -96,10 +96,22 @@ COMP_FUNDA = ExportSpec(
 FF_DAILY = ExportSpec(
     name="ff_factors_daily",
     wrds_table="ff.factors_daily",
-    columns={"date": "date", "mktrf": "mktrf", "smb": "smb", "hml": "hml", "rf": "rf",
-             "umd": "umd"},
+    columns={"date": "date", "mktrf": "mktrf", "smb": "smb", "hml": "hml", "rmw": "rmw",
+             "cma": "cma", "rf": "rf", "umd": "umd"},
     required=("date", "mktrf", "rf"),
     date_columns=("date",),
 )
 
-ALL_SPECS = (CRSP_DAILY, SP500_MEMBERSHIP, CCM_LINK, COMP_FUNDQ, COMP_FUNDA, FF_DAILY)
+CRSP_DELIST = ExportSpec(
+    name="crsp_delist",
+    wrds_table="crsp.stkdelists (v2; legacy crsp.dsedelist names also accepted)",
+    columns={"permno": "permno", "delistingdt": "date", "dlstdt": "date", "delret": "delret",
+             "dlret": "delret", "delnextprc": "delnextprc", "delactiontype": "action",
+             "delreasontype": "reason", "delpaymenttype": "payment", "dlstcd": "code"},
+    required=("permno", "date", "delret"),
+    date_columns=("date",),
+)
+
+# Delistings are ingested before the daily file, which uses them at listing gaps.
+ALL_SPECS = (CRSP_DELIST, CRSP_DAILY, SP500_MEMBERSHIP, CCM_LINK, COMP_FUNDQ, COMP_FUNDA,
+             FF_DAILY)

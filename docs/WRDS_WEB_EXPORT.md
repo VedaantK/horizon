@@ -102,17 +102,21 @@ uv run concordance ingest ~/wrds_exports
 Ingest prints a summary of every file. If it reports a missing or renamed column, paste the
 message to Claude. It lists the columns it found, so the schema can be adjusted in a minute.
 
-## Query 6: CRSP delisting returns — save as `crsp_delist.csv`
-Needed for the 3 listing gaps that began while the stock was an S&P member (HealthSouth
-2003, Comverse 2007, Washington Mutual 2008; see `lake/manifest.json`). CRSP's delisting
-return measures the drop from the last exchange price to the first off-exchange price, which
-replaces the "exit at the last price" assumption.
+## Query 6: CRSP delisting returns — save as `crsp_delist_<years>.csv`
+Values the 18 listing gaps (see `lake/manifest.json`); 3 began while the stock was an S&P
+member (HealthSouth 2003, Comverse 2007, Washington Mutual 2008). Ingest also re-checks that
+every final delisting return is already in the daily file.
 
-**Menu:** CRSP → Annual Update → Stock / Security Files → **Delisting Information** (the
-legacy form; if it is missing, use the v2 Stock "Delisting" table with all variables)
+**Menu:** CRSP → Stock (v2) → **Delisting information** (the legacy Annual Update form with
+`DLSTDT`, `DLRET` works too)
 
 | Step | Setting |
 |---|---|
+| Date range | **Type the start date: 1990-01-01.** The form defaults to 2020. |
+| Company codes | PERMNO, upload `permnos.txt` |
+| Variables | all (needed: `PERMNO`, `DelistingDt`, `DelRet`, `DelNextPrc`) |
+
+---|---|
 | Date range | 1990-01-01 → latest |
 | Company codes | PERMNO, upload `permnos.txt` |
 | Variables | `PERMNO`, `DLSTDT`, `DLSTCD`, `DLRET`, `DLRETX`, `DLPRC`, `NWPERM`, `NWCOMP` |
@@ -131,7 +135,8 @@ legacy form; if it is missing, use the v2 Stock "Delisting" table with all varia
 - [x] `sp500_membership.csv`
 - [x] `permnos.txt` (generated, not downloaded)
 - [x] `crsp_daily_*.csv.gz`
-- [ ] `ff_factors_daily.csv` (Query 5: benchmark sanity check)
-- [ ] `crsp_delist.csv` (Query 6)
+- [x] `ff_factors_daily.csv.gz`
+- [x] `crsp_delist_2020_2025.csv.gz`
+- [ ] `crsp_delist_1990_2019.csv` (Query 6 again, for the pre-2020 gaps)
 - [ ] `ccm_link.csv` (optional; may be unavailable)
 - [ ] `comp_fundq.csv` (optional for now)

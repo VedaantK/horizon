@@ -20,6 +20,7 @@ from concordance.data.schema import (
     CCM_LINK,
     COMP_FUNDQ,
     CRSP_DAILY,
+    CRSP_DELIST,
     SP500_MEMBERSHIP,
     ExportSpec,
 )
@@ -94,7 +95,17 @@ def _dedupe(df: pd.DataFrame, keys: list[str], label: str) -> tuple[pd.DataFrame
     return df, n_exact
 
 
-def clean_crsp_daily(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def clean_delist(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    df = df.copy()
+    df["permno"] = df["permno"].astype("int64")
+    df = df.drop_duplicates().sort_values(["permno", "date"]).reset_index(drop=True)
+    return df, {"rows": len(df), "start": str(df["date"].min().date()),
+                "end": str(df["date"].max().date()),
+                "with_return": int(df["delret"].notna().sum())}
+
+
+def clean_crsp_daily(df: pd.DataFrame, delist: pd.DataFrame | None = None
+                     ) -> tuple[pd.DataFrame, dict]:
     df = df.copy()
     df["permno"] = df["permno"].astype("int64")
     if df["date"].isna().any():
@@ -111,6 +122,10 @@ def clean_crsp_daily(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         raise IngestError("crsp_daily: weekend dates present")
     df = df.sort_values(["permno", "date"]).reset_index(drop=True)
     df, rules = _unchained_rows(df)
+    df, gap_stats = _gap_exit_returns(df, delist)
+    rules.update(gap_stats)
+    if delist is not None:
+        rules["delisting_return_check"] = _check_final_delistings(df, delist)
     stats = {"rows": len(df), "exact_duplicates_dropped": n_dup,
              "permnos": int(df["permno"].nunique()),
              "start": str(df["date"].min().date()), "end": str(df["date"].max().date()),
@@ -160,6 +175,75 @@ def _unchained_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     }
 
 
+def _gap_exit_returns(df: pd.DataFrame, delist: pd.DataFrame | None
+                      ) -> tuple[pd.DataFrame, dict]:
+    """Value a listing that went dark with CRSP's delisting return, when one is known.
+
+    The return (`delret`, else `delnextprc` / last close - 1, i.e. the first price off the
+    exchange) is placed on the first blank row after the last priced row, so the panel ends
+    that listing at the delisted value and force-sells it at the next session. The relisting
+    row records whether its gap exit is known (`gap_exit_known`); unknown exits stay at the
+    last price, and `concordance run` warns when a strategy held one.
+    """
+    df = df.copy()
+    df["gap_exit_known"] = False
+    df["ret_from_delist"] = False
+    stats = {"gap_exits_from_delistings": [], "gap_exits_unknown": []}
+    relist_rows = np.flatnonzero(df["relist"].to_numpy())
+    for i in relist_rows:
+        permno, relisted = int(df.at[i, "permno"]), df.at[i, "date"]
+        before = df.index[(df["permno"] == permno) & (df["date"] < relisted)]
+        priced = before[df.loc[before, "close"].notna()]
+        last = priced[-1]
+        last_date, last_close = df.at[last, "date"], df.at[last, "close"]
+        entry = {"permno": permno, "last_priced": str(last_date.date()),
+                 "relisted": str(relisted.date())}
+        r, source = np.nan, None
+        if delist is not None:
+            d = delist[(delist["permno"] == permno)
+                       & (delist["date"] >= last_date - pd.Timedelta(days=GAP_DAYS))
+                       & (delist["date"] < relisted)]
+            if len(d):
+                rec = d.iloc[0]
+                if pd.notna(rec["delret"]):
+                    r, source = float(rec["delret"]), "delret"
+                elif "delnextprc" in d.columns and pd.notna(rec.get("delnextprc")):
+                    r, source = abs(float(rec["delnextprc"])) / last_close - 1.0, "delnextprc"
+        slot = last + 1
+        if source and slot < i and pd.isna(df.at[slot, "close"]) and pd.isna(df.at[slot, "ret"]):
+            df.at[slot, "ret"] = r
+            # A representational price for the panel (P&L uses ret); floored to stay > 0.
+            df.at[slot, "close"] = max(last_close * (1.0 + r), 1e-6)
+            df.at[slot, "ret_from_delist"] = True
+            df.at[i, "gap_exit_known"] = True
+            stats["gap_exits_from_delistings"].append(
+                {**entry, "date": str(df.at[slot, "date"].date()), "ret": round(r, 6),
+                 "source": source})
+        else:
+            stats["gap_exits_unknown"].append(entry)
+    return df, stats
+
+
+def _check_final_delistings(df: pd.DataFrame, delist: pd.DataFrame) -> dict:
+    """CIZ daily returns already include the delisting return on a PERMNO's final row.
+    Confirm that for every delisting followed by no further prices (verified exactly on all
+    82 such cases in 2020-2025)."""
+    rets = df.dropna(subset=["ret"]).groupby("permno").tail(1).set_index("permno")
+    last_px = df.dropna(subset=["close"]).groupby("permno")["date"].max()
+    n, bad = 0, []
+    for rec in delist.dropna(subset=["delret"]).itertuples():
+        if rec.permno not in rets.index:
+            continue
+        if last_px[rec.permno] > rec.date + pd.Timedelta(days=GAP_DAYS):
+            continue  # not the final listing (a later relisting exists)
+        n += 1
+        if not np.isclose(rets.at[rec.permno, "ret"], rec.delret, atol=1e-6):
+            bad.append({"permno": int(rec.permno), "date": str(rec.date.date()),
+                        "delret": float(rec.delret),
+                        "last_daily_ret": float(rets.at[rec.permno, "ret"])})
+    return {"checked": n, "mismatches": bad}
+
+
 def clean_membership(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df.copy()
     df["permno"] = df["permno"].astype("int64")
@@ -193,7 +277,8 @@ def clean_fundq(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
                                        "missing_rdq": int(df["rdq"].isna().sum())}
 
 
-CLEANERS = {CRSP_DAILY.name: clean_crsp_daily, SP500_MEMBERSHIP.name: clean_membership,
+CLEANERS = {CRSP_DELIST.name: clean_delist, CRSP_DAILY.name: clean_crsp_daily,
+            SP500_MEMBERSHIP.name: clean_membership,
             CCM_LINK.name: clean_ccm_link, COMP_FUNDQ.name: clean_fundq}
 
 
@@ -223,6 +308,7 @@ def ingest(raw_dir: Path, lake: Path | None = None) -> dict:
     raw_dir, lake = Path(raw_dir), Path(lake or default_lake())
     lake.mkdir(parents=True, exist_ok=True)
     manifest = {"ingested_at": datetime.now(UTC).isoformat(), "files": {}}
+    cleaned: dict[str, pd.DataFrame] = {}
     for spec in ALL_SPECS:
         paths = find_exports(raw_dir, spec)
         if not paths:
@@ -230,7 +316,11 @@ def ingest(raw_dir: Path, lake: Path | None = None) -> dict:
             continue
         df = read_exports(paths, spec)
         clean = CLEANERS.get(spec.name)
-        df, stats = clean(df) if clean else (df, {"rows": len(df)})
+        if spec is CRSP_DAILY:
+            df, stats = clean(df, delist=cleaned.get(CRSP_DELIST.name))
+        else:
+            df, stats = clean(df) if clean else (df, {"rows": len(df)})
+        cleaned[spec.name] = df
         df.to_parquet(lake / f"{spec.name}.parquet", index=False)
         manifest["files"][spec.name] = {
             "status": "ok", "sources": {p.name: _sha256(p) for p in paths}, **stats}

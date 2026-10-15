@@ -97,7 +97,12 @@ def listing_gap_exits(panel: MarketPanel, res) -> pd.DataFrame:
     ids = np.asarray(panel.assets)[f["asset"].to_numpy()]
     when = panel.sessions[f["session"].to_numpy()]
     forced = panel.liquidate[f["session"].to_numpy(), f["asset"].to_numpy()]
-    relists_later = np.array([((gaps["permno"] == p) & (gaps["date"] >= d)).any()
+    # The first relisting after the exit tells whether CRSP gave a delisting value for it.
+    def unknown_exit(p, d):
+        g = gaps[(gaps["permno"] == p) & (gaps["date"] >= d)].sort_values("date")
+        return len(g) > 0 and not bool(g["gap_exit_known"].iloc[0])
+
+    relists_later = np.array([unknown_exit(p, d)
                               for p, d in zip(permno_of(ids), when, strict=True)])
     hit = forced & relists_later
     f = f[hit]
