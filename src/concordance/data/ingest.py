@@ -35,12 +35,28 @@ def default_lake() -> Path:
     return Path(os.environ.get("CONCORDANCE_LAKE", Path.home() / "concordance" / "lake"))
 
 
-def find_export(raw_dir: Path, spec: ExportSpec) -> Path | None:
+def find_exports(raw_dir: Path, spec: ExportSpec) -> list[Path]:
+    """`<name>.ext` or chunked `<name>_<anything>.ext` (web-form downloads split by date)."""
+    found = []
     for ext in (".parquet", ".csv.gz", ".csv"):
-        p = raw_dir / f"{spec.name}{ext}"
-        if p.exists():
-            return p
-    return None
+        found += [p for p in raw_dir.glob(f"{spec.name}*{ext}")
+                  if p.name == f"{spec.name}{ext}" or p.name.startswith(f"{spec.name}_")]
+    return sorted(set(found))
+
+
+def _parse_dates(col: pd.Series, label: str) -> pd.Series:
+    """WRDS web forms emit YYYY-MM-DD, YYYYMMDD or 02JAN2020 depending on the chosen format.
+    Unparseable non-empty values raise instead of becoming NaT."""
+    s = col.astype("string").str.strip().replace({"": pd.NA, "E": pd.NA, ".": pd.NA})
+    out = pd.Series(pd.NaT, index=col.index, dtype="datetime64[ns]")
+    ymd = s.str.fullmatch(r"\d{8}(\.0)?").fillna(False).astype(bool)
+    out[ymd] = pd.to_datetime(s[ymd].str[:8], format="%Y%m%d")
+    rest = s.notna() & ~ymd
+    out[rest] = pd.to_datetime(s[rest], format="mixed", errors="coerce")
+    bad = rest & out.isna()
+    if bad.any():
+        raise IngestError(f"{label}: unparseable dates, e.g. {s[bad].iloc[0]!r}")
+    return out
 
 
 def read_export(path: Path, spec: ExportSpec) -> pd.DataFrame:
@@ -48,18 +64,23 @@ def read_export(path: Path, spec: ExportSpec) -> pd.DataFrame:
         df = pd.read_parquet(path)
     else:
         df = pd.read_csv(path, low_memory=False)
-    df.columns = [c.lower() for c in df.columns]
+    df.columns = [c.strip().lower() for c in df.columns]
     keep = {src: dst for src, dst in spec.columns.items() if src in df.columns}
     df = df[list(keep)].rename(columns=keep)
     df = df.loc[:, ~df.columns.duplicated()]
     missing = [c for c in spec.required if c not in df.columns]
     if missing:
         raise IngestError(f"{path.name}: missing required columns {missing} "
-                          f"(expected from {spec.wrds_table}; see docs/WRDS_EXPORT.md)")
+                          f"(expected from {spec.wrds_table}; see docs/WRDS_WEB_EXPORT.md). "
+                          f"Columns found: {sorted(df.columns)}")
     for c in spec.date_columns:
         if c in df.columns:
-            df[c] = pd.to_datetime(df[c], errors="coerce")
+            df[c] = _parse_dates(df[c], f"{path.name}:{c}")
     return df
+
+
+def read_exports(paths: list[Path], spec: ExportSpec) -> pd.DataFrame:
+    return pd.concat([read_export(p, spec) for p in paths], ignore_index=True)
 
 
 def _dedupe(df: pd.DataFrame, keys: list[str], label: str) -> tuple[pd.DataFrame, int]:
@@ -147,15 +168,15 @@ def ingest(raw_dir: Path, lake: Path | None = None) -> dict:
     lake.mkdir(parents=True, exist_ok=True)
     manifest = {"ingested_at": datetime.now(UTC).isoformat(), "files": {}}
     for spec in ALL_SPECS:
-        path = find_export(raw_dir, spec)
-        if path is None:
+        paths = find_exports(raw_dir, spec)
+        if not paths:
             manifest["files"][spec.name] = {"status": "missing"}
             continue
-        df = read_export(path, spec)
+        df = read_exports(paths, spec)
         clean = CLEANERS.get(spec.name)
         df, stats = clean(df) if clean else (df, {"rows": len(df)})
         df.to_parquet(lake / f"{spec.name}.parquet", index=False)
-        manifest["files"][spec.name] = {"status": "ok", "source": str(path),
-                                        "sha256": _sha256(path), **stats}
+        manifest["files"][spec.name] = {
+            "status": "ok", "sources": {p.name: _sha256(p) for p in paths}, **stats}
     (lake / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest

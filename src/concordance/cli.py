@@ -1,6 +1,7 @@
 """concordance command line.
 
   concordance ingest RAW_DIR               validate WRDS exports into the lake
+  concordance permnos MEMBERSHIP_FILE       PERMNO list for the CRSP web-form upload
   concordance run STRATEGY.py --start --end  run all engines, reconcile, validate, report
   concordance demo                          the same pipeline on synthetic data (no WRDS)
 """
@@ -83,6 +84,19 @@ def cmd_ingest(a):
     print(json.dumps(ingest(Path(a.raw_dir), Path(a.lake) if a.lake else None), indent=2))
 
 
+def cmd_permnos(a):
+    """Membership download -> one PERMNO per line, for the CRSP web form's code-list upload."""
+    from concordance.data.ingest import clean_membership, read_export
+    from concordance.data.schema import SP500_MEMBERSHIP
+
+    spells, _ = clean_membership(read_export(Path(a.membership_file), SP500_MEMBERSHIP))
+    if a.since:
+        spells = spells[spells["end"] >= pd.Timestamp(a.since)]
+    ids = sorted(spells["permno"].unique())
+    Path(a.output).write_text("\n".join(str(i) for i in ids) + "\n")
+    print(f"wrote {len(ids)} PERMNOs to {a.output}")
+
+
 def cmd_run(a):
     from concordance.data.crsp import load_sp500_panel
 
@@ -130,6 +144,13 @@ def main(argv=None):
     s.add_argument("raw_dir")
     s.add_argument("--lake")
     s.set_defaults(fn=cmd_ingest)
+
+    s = sub.add_parser("permnos", help="PERMNO list file for the CRSP web-query upload")
+    s.add_argument("membership_file")
+    s.add_argument("-o", "--output", default="permnos.txt")
+    s.add_argument("--since", default="1994-01-01",
+                   help="only members whose spell ends on/after this date")
+    s.set_defaults(fn=cmd_permnos)
 
     def common(s):
         s.add_argument("--engines", default="reference,vectorbt,nautilus")

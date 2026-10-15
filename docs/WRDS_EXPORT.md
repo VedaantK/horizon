@@ -1,5 +1,7 @@
 # WRDS exports for Concordance
 
+> **IP-Auth / web-form only?** Use [`WRDS_WEB_EXPORT.md`](WRDS_WEB_EXPORT.md) instead.
+
 Run these queries on WRDS. The easiest place is **WRDS Cloud → JupyterHub** (Python, with
 `wrds` preinstalled), or the **SAS Studio / PostgreSQL** query tool. Save each result
 with the **exact file name** shown, as `.parquet` (preferred) or `.csv.gz`. Put them all in one

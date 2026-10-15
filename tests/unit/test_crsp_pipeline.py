@@ -121,3 +121,35 @@ def test_lockbox(raw_dir, tmp_path, monkeypatch):
     load_sp500_panel(SESS[0], SESS[59], lake=lake)  # before the lockbox: fine
     load_sp500_panel(SESS[0], SESS[-1], lake=lake, unlock_reason="final evaluation")
     assert "final evaluation" in (lake / "lockbox_ledger.jsonl").read_text()
+
+
+def test_chunked_web_exports_with_wrds_date_formats(raw_dir, tmp_path):
+    """Web-form downloads: CRSP split into date chunks (overlapping), YYYYMMDD dates, CSV."""
+    df = pd.read_parquet(raw_dir / "crsp_daily.parquet")
+    (raw_dir / "crsp_daily.parquet").unlink()
+    df["DlyCalDt"] = pd.to_datetime(df["DlyCalDt"]).dt.strftime("%Y%m%d")
+    cut = SESS[40].strftime("%Y%m%d")
+    df[df.DlyCalDt <= cut].to_csv(raw_dir / "crsp_daily_part1.csv", index=False)
+    df[df.DlyCalDt >= cut].to_csv(raw_dir / "crsp_daily_part2.csv", index=False)  # overlap
+    lake = tmp_path / "lake"
+    man = ingest(raw_dir, lake)["files"]["crsp_daily"]
+    assert sorted(man["sources"]) == ["crsp_daily_part1.csv", "crsp_daily_part2.csv"]
+    assert man["rows"] == len(df.drop_duplicates())
+    panel = load_sp500_panel(SESS[0], SESS[-1], lake=lake)
+    assert panel.shape == (len(SESS), 3)
+
+
+def test_unparseable_dates_rejected(raw_dir, tmp_path):
+    df = pd.read_parquet(raw_dir / "crsp_daily.parquet")
+    df["DlyCalDt"] = df["DlyCalDt"].astype(str)
+    df.loc[df.index[3], "DlyCalDt"] = "not a date"
+    df.to_parquet(raw_dir / "crsp_daily.parquet")
+    with pytest.raises(IngestError, match="unparseable dates"):
+        ingest(raw_dir, tmp_path / "lake")
+
+
+def test_permnos_command(raw_dir, tmp_path):
+    from concordance.cli import main
+    out = tmp_path / "permnos.txt"
+    main(["permnos", str(raw_dir / "sp500_membership.csv"), "-o", str(out)])
+    assert out.read_text().split() == ["10001", "10002", "10003"]
