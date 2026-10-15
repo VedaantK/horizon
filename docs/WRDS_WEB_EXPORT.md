@@ -102,10 +102,36 @@ uv run concordance ingest ~/wrds_exports
 Ingest prints a summary of every file. If it reports a missing or renamed column, paste the
 message to Claude. It lists the columns it found, so the schema can be adjusted in a minute.
 
+## Query 6: CRSP delisting returns — save as `crsp_delist.csv`
+Needed for the 3 listing gaps that began while the stock was an S&P member (HealthSouth
+2003, Comverse 2007, Washington Mutual 2008; see `lake/manifest.json`). CRSP's delisting
+return measures the drop from the last exchange price to the first off-exchange price, which
+replaces the "exit at the last price" assumption.
+
+**Menu:** CRSP → Annual Update → Stock / Security Files → **Delisting Information** (the
+legacy form; if it is missing, use the v2 Stock "Delisting" table with all variables)
+
+| Step | Setting |
+|---|---|
+| Date range | 1990-01-01 → latest |
+| Company codes | PERMNO, upload `permnos.txt` |
+| Variables | `PERMNO`, `DLSTDT`, `DLSTCD`, `DLRET`, `DLRETX`, `DLPRC`, `NWPERM`, `NWCOMP` |
+
+---
+
+## What was actually downloaded (October 2026)
+- `sp500_membership.csv` was extracted from the S&P 500 Constituents form's output. That form
+  also returns daily stock rows, but only for days inside each membership spell, so it can't
+  replace Query 2.
+- `crsp_daily_1990_2019.csv.gz` and `crsp_daily_2020_2025.csv.gz`: one Daily Stock File query
+  each. They include `sprtrn` (the S&P 500 return), which ingest keeps as the benchmark.
+- CRSP opening prices start in mid-1992, so backtests can start in 1993 at the earliest.
+
 ## Checklist
-- [ ] `sp500_membership.csv`
-- [ ] `permnos.txt` (generated, not downloaded)
-- [ ] `crsp_daily_*.csv` × 6 chunks
+- [x] `sp500_membership.csv`
+- [x] `permnos.txt` (generated, not downloaded)
+- [x] `crsp_daily_*.csv.gz`
+- [ ] `ff_factors_daily.csv` (Query 5: benchmark sanity check)
+- [ ] `crsp_delist.csv` (Query 6)
 - [ ] `ccm_link.csv` (optional; may be unavailable)
 - [ ] `comp_fundq.csv` (optional for now)
-- [ ] `ff_factors_daily.csv` (optional for now)

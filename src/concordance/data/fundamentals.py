@@ -71,11 +71,15 @@ def asof_matrix(rows: pd.DataFrame, field: str, panel: MarketPanel,
     """
     T, N = panel.shape
     out = np.full((T, N), np.nan)
-    col = {a: j for j, a in enumerate(panel.assets)}
+    # One PERMNO can span several listing ids (see crsp.RELIST_ID_OFFSET).
+    permnos = panel.meta.get("permno", np.asarray(panel.assets))
+    col: dict = {}
+    for j, p in enumerate(permnos):
+        col.setdefault(int(p), []).append(j)
     sess = panel.sessions.values.astype("datetime64[ns]")
     for permno, g in rows.dropna(subset=[field]).groupby("permno"):
-        j = col.get(permno)
-        if j is None:
+        js = col.get(int(permno))
+        if js is None:
             continue
         g = g.sort_values(["available_at", "datadate"])
         # Drop rows that arrive after a newer fiscal period is already known.
@@ -90,7 +94,7 @@ def asof_matrix(rows: pd.DataFrame, field: str, panel: MarketPanel,
         dd[ok] = g["datadate"].values.astype("datetime64[ns]")[k[ok]]
         stale = ok & ((sess - dd) > np.timedelta64(max_age_days, "D"))
         vals[stale] = np.nan
-        out[:, j] = vals
+        out[:, js] = vals[:, None]
     return out
 
 

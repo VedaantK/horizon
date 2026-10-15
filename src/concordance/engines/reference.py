@@ -19,7 +19,10 @@ _plan = plan_orders.py_func  # pure Python: independent of the numba compilation
 
 
 def run(panel: MarketPanel, weights: np.ndarray, has_weights: np.ndarray,
-        fee_rate: np.ndarray, init_cash: float) -> BacktestResult:
+        fee_rate: np.ndarray, init_cash: float, compiled: bool = False) -> BacktestResult:
+    """`compiled=True` uses the numba planner (same rule, much faster) for statistical
+    re-runs such as the placebo. Reconciliation always uses the pure-Python planner."""
+    plan = plan_orders if compiled else _plan
     T, N = panel.shape
     cash = float(init_cash)
     pos = np.zeros(N)
@@ -33,7 +36,7 @@ def run(panel: MarketPanel, weights: np.ndarray, has_weights: np.ndarray,
 
     for i in range(T):
         # --- open: plan and execute -------------------------------------------------
-        delta, order, m, was_scaled = _plan(
+        delta, order, m, was_scaled = plan(
             cash, pos, panel.exec_price[i], last_val, fee_rate[i],
             weights[i], bool(has_weights[i]), panel.liquidate[i])
         if was_scaled:

@@ -43,6 +43,7 @@ CRSP_DAILY = ExportSpec(
         "shrout": "shrout",
         "dlydelflg": "delist_flag",
         "dlyprevdt": "prev_date",
+        "sprtrn": "sp500_ret",  # S&P 500 composite return that day (benchmark, optional)
     },
     required=("permno", "date", "open", "prc", "ret"),
     date_columns=("date", "prev_date"),

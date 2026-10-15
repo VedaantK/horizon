@@ -34,7 +34,7 @@ def _sharpe(equity: np.ndarray) -> float:
 def random_selection_placebo(panel: MarketPanel, weights: np.ndarray, has: np.ndarray,
                              fee_rate: np.ndarray, init_cash: float = 1e6,
                              n: int = 300, seed: int = 0) -> PlaceboResult:
-    real = reference.run(panel, weights, has, fee_rate, init_cash)
+    real = reference.run(panel, weights, has, fee_rate, init_cash, compiled=True)
     rng = np.random.default_rng(seed)
     T, N = panel.shape
     # Eligible on the decision session (execution row i was decided at i - 1).
@@ -51,7 +51,8 @@ def random_selection_placebo(panel: MarketPanel, weights: np.ndarray, has: np.nd
                 continue
             pick = rng.choice(pool, size=min(held, len(pool)), replace=False)
             w[i, pick] = weights[i].sum() / len(pick)
-        sharpes[k] = _sharpe(reference.run(panel, w, has, fee_rate, init_cash).equity)
+        sharpes[k] = _sharpe(
+            reference.run(panel, w, has, fee_rate, init_cash, compiled=True).equity)
     s = _sharpe(real.equity)
     p = (1 + int((sharpes >= s).sum())) / (1 + n)
     return PlaceboResult(s, sharpes, p)

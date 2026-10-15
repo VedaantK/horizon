@@ -170,3 +170,19 @@ def test_view_cannot_see_the_future():
 
     weight_schedule(Probe({}), panel)
     assert seen == [(0, 1, 10.0), (1, 2, 11.0), (2, 3, 12.0)]  # never sees s3
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_full_exit_leaves_exactly_zero(engine):
+    # Price 29 everywhere, cash 1000, so value stays 1000. Targets on the 1e-6 grid:
+    #   s1: 0.29*1000/29 = 10 sh; s2: 0.09*1000/29 = 3.103448 sh (sell 6.896552);
+    #   s3: 0.06*1000/29 = 2.068966 sh (sell 1.034482).
+    # In floats 10 - 6.896552 - 1.034482 = 2.0689660000000005, one ulp off the grid, so
+    # rounding the exit (round(0 - pos)) would leave a 4e-16 crumb. s4 exits fully: the
+    # position must be exactly 0, as it would be at a broker.
+    rows = path("A", closes=[29.0] * 6, opens=[29.0] * 6)
+    sched = {0: {"A": 0.29}, 1: {"A": 0.09}, 2: {"A": 0.06}, 3: {}}
+    _, r = go(engine, rows, sched)
+    assert r.fills["qty"].round(6).tolist() == [10.0, -6.896552, -1.034482, -2.068966]
+    assert r.positions[4, 0] == 0.0 and r.positions[-1, 0] == 0.0
+    np.testing.assert_allclose(r.equity, 1000.0, atol=1e-9)

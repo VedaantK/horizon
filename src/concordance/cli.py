@@ -37,7 +37,7 @@ def load_strategy(path: str) -> Strategy:
 
 def evaluate(panel: MarketPanel, strategy: Strategy, engines, costs: CostModel,
              init_cash: float, program: str, report: Path | None, placebo: int,
-             lookahead_cuts: int) -> dict:
+             lookahead_cuts: int, ledger_root: Path | None = None) -> dict:
     from concordance.validation.dsr import deflated_sharpe
     from concordance.validation.ledger import TrialLedger
     from concordance.validation.lookahead import check_truncation_invariance
@@ -53,11 +53,17 @@ def evaluate(panel: MarketPanel, strategy: Strategy, engines, costs: CostModel,
         if not out.report.ok:
             raise SystemExit("ENGINES DISAGREE: result rejected.")
     res = out.result
-    m = metrics(res)
-
     start = panel.meta.get("warmup_sessions", 0)
+    benchmark = panel.meta.get("benchmark")
+    m = metrics(res, start=start, benchmark=benchmark)
+    gap_exits = listing_gap_exits(panel, res)
+    if len(gap_exits):
+        m["listing_gap_exits"] = len(gap_exits)
+        print("WARNING: positions exited at a listing gap, valued at the last price before "
+              "the gap (CRSP has no return across it):\n" + gap_exits.to_string(index=False))
+
     rets = res.returns.iloc[max(start, 1):]
-    ledger = TrialLedger(program=program)
+    ledger = TrialLedger(root=ledger_root, program=program)
     params = getattr(strategy, "params", {})
     ledger.record(getattr(strategy, "name", type(strategy).__name__), params, rets)
     n_eff = max(ledger.n_effective(), 1.0)
@@ -73,9 +79,31 @@ def evaluate(panel: MarketPanel, strategy: Strategy, engines, costs: CostModel,
     if report:
         extra = {"reconciliation": out.report.summary() if out.report else "single engine",
                  "metrics": json.dumps(m, indent=2, default=str)}
-        html_report(res, report, title=getattr(strategy, "name", "strategy"), extra=extra)
+        html_report(res, report, title=getattr(strategy, "name", "strategy"), extra=extra,
+                    benchmark=benchmark, start=start)
         m["report"] = str(report)
     return m
+
+
+def listing_gap_exits(panel: MarketPanel, res) -> pd.DataFrame:
+    """Forced exits at the start of a listing gap that held a position (a listing whose
+    PERMNO relists later inside the panel)."""
+    from concordance.data.crsp import permno_of
+
+    gaps = panel.meta.get("listing_gaps")
+    f = res.fills
+    if gaps is None or not len(gaps) or not len(f):
+        return pd.DataFrame(columns=["date", "permno", "qty", "price"])
+    ids = np.asarray(panel.assets)[f["asset"].to_numpy()]
+    when = panel.sessions[f["session"].to_numpy()]
+    forced = panel.liquidate[f["session"].to_numpy(), f["asset"].to_numpy()]
+    relists_later = np.array([((gaps["permno"] == p) & (gaps["date"] >= d)).any()
+                              for p, d in zip(permno_of(ids), when, strict=True)])
+    hit = forced & relists_later
+    f = f[hit]
+    return pd.DataFrame({"date": panel.sessions[f["session"].to_numpy()].date,
+                         "permno": permno_of(ids[hit]), "qty": f["qty"].to_numpy(),
+                         "price": f["price"].to_numpy()})
 
 
 def cmd_ingest(a):
@@ -106,8 +134,11 @@ def cmd_run(a):
                              unlock_reason=a.unlock_lockbox)
     print(f"panel: {panel.shape[0]} sessions x {panel.shape[1]} securities, "
           f"coverage {panel.meta['coverage_overall']:.2%}")
+    from concordance.data.ingest import default_lake
+
     m = evaluate(panel, strategy, _engines(a.engines), _costs(a), a.init_cash, a.program,
-                 Path(a.report) if a.report else None, a.placebo, a.lookahead_cuts)
+                 Path(a.report) if a.report else None, a.placebo, a.lookahead_cuts,
+                 ledger_root=Path(a.lake or default_lake()) / "ledger")
     print(json.dumps(m, indent=2, default=str))
 
 

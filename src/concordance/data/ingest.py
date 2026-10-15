@@ -110,11 +110,54 @@ def clean_crsp_daily(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     if (df["date"].dt.dayofweek >= 5).any():
         raise IngestError("crsp_daily: weekend dates present")
     df = df.sort_values(["permno", "date"]).reset_index(drop=True)
+    df, rules = _unchained_rows(df)
     stats = {"rows": len(df), "exact_duplicates_dropped": n_dup,
              "permnos": int(df["permno"].nunique()),
              "start": str(df["date"].min().date()), "end": str(df["date"].max().date()),
-             "no_trade_rows": int(df["no_trade"].sum())}
+             "no_trade_rows": int(df["no_trade"].sum()), **rules}
     return df, stats
+
+
+GAP_DAYS = 7  # calendar days between priced rows that count as a listing gap
+
+
+def _unchained_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Priced rows with no CRSP return, which the panel cannot chain on its own.
+
+    Two cases are resolved by explicit rules and listed in the manifest:
+    - final priced row of a PERMNO (a delisting with a price but no DlyRet, e.g. SVB on
+      2023-03-13): ret = close / previous close - 1.
+    - first priced row after a listing gap (the security was off-exchange and CRSP has no
+      return bridging the gap): flagged `relist`. The panel loader treats each listing as
+      its own security, so no return or signal is ever chained across the gap.
+    Any other priced row without a return is left missing, and the panel refuses it.
+    `df` must be sorted by permno, date.
+    """
+    pno, px = df["permno"], df["close"].notna()
+    n_px = px.groupby(pno).cumsum()
+    seen_before = (n_px - px.astype(int)) > 0
+    later = (px.groupby(pno).transform("sum") - n_px) > 0
+    prev_close = df["close"].groupby(pno).ffill().groupby(pno).shift()
+    prev_date = df["date"].where(px).groupby(pno).ffill().groupby(pno).shift()
+    prev_row_priced = px.groupby(pno).shift(fill_value=False).astype(bool)
+    unchained = px & df["ret"].isna() & seen_before
+    gap = ~prev_row_priced | ((df["date"] - prev_date).dt.days > GAP_DAYS)
+    relist = unchained & gap
+    final = unchained & ~gap & ~later
+    df = df.copy()
+    df.loc[final, "ret"] = df.loc[final, "close"] / prev_close[final] - 1.0
+    df["relist"] = relist
+    df["ret_from_price"] = final
+    fmt = lambda d: str(pd.Timestamp(d).date())  # noqa: E731
+    return df, {
+        "final_return_from_price": [
+            {"permno": int(r.permno), "date": fmt(r.date), "ret": round(float(r.ret), 6)}
+            for r in df.loc[final].itertuples()],
+        "listing_gaps": [
+            {"permno": int(df.at[i, "permno"]), "last_priced": fmt(prev_date[i]),
+             "relisted": fmt(df.at[i, "date"])} for i in np.flatnonzero(relist)],
+        "unchained_rows_left": int((unchained & ~relist & ~final).sum()),
+    }
 
 
 def clean_membership(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
@@ -162,6 +205,19 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _flag_member_gaps(manifest: dict, lake: Path) -> None:
+    """Mark listing gaps that began while the stock was an S&P 500 member. A strategy holding
+    one exits at the last price before the gap, which is an assumption, not a CRSP return."""
+    crsp, mem = manifest["files"].get("crsp_daily", {}), manifest["files"].get(
+        SP500_MEMBERSHIP.name, {})
+    if crsp.get("status") != "ok" or mem.get("status") != "ok":
+        return
+    spells = pd.read_parquet(lake / f"{SP500_MEMBERSHIP.name}.parquet")
+    for g in crsp["listing_gaps"]:
+        s, d = spells[spells["permno"] == g["permno"]], pd.Timestamp(g["last_priced"])
+        g["member_at_gap"] = bool(((s["start"] <= d) & (s["end"] >= d)).any())
+
+
 def ingest(raw_dir: Path, lake: Path | None = None) -> dict:
     """Ingest every export found in `raw_dir`. Returns the manifest (also saved to the lake)."""
     raw_dir, lake = Path(raw_dir), Path(lake or default_lake())
@@ -178,5 +234,6 @@ def ingest(raw_dir: Path, lake: Path | None = None) -> dict:
         df.to_parquet(lake / f"{spec.name}.parquet", index=False)
         manifest["files"][spec.name] = {
             "status": "ok", "sources": {p.name: _sha256(p) for p in paths}, **stats}
+    _flag_member_gaps(manifest, lake)
     (lake / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest

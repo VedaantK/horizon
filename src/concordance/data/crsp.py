@@ -29,6 +29,29 @@ class CoverageError(RuntimeError):
 PANEL_COLUMNS = ["open", "high", "low", "close", "ret", "retx", "volume", "bid", "ask",
                  "mktcap_k", "shrout"]
 
+# A PERMNO that left its exchange and came back (see ingest `relist`) is split into one
+# security per listing, so no return or signal is chained across the gap. The first listing
+# keeps the PERMNO as its asset id; the k-th relisting gets PERMNO + k * RELIST_ID_OFFSET.
+# Ids only encode relistings that already happened, so they carry no future information.
+# PERMNOs are below 100,000; `permno_of` recovers the PERMNO.
+RELIST_ID_OFFSET = 1_000_000
+
+
+def permno_of(asset_id):
+    return np.asarray(asset_id) % RELIST_ID_OFFSET
+
+
+def listing_asset_ids(long: pd.DataFrame, relist_dates: pd.DataFrame) -> np.ndarray:
+    """Asset id for each (permno, date) row, given every relisting date in the full history."""
+    ids = long["permno"].to_numpy().copy()
+    for permno, g in relist_dates.groupby("permno"):
+        rows = np.flatnonzero(long["permno"].to_numpy() == permno)
+        d = np.sort(g["date"].to_numpy(dtype="datetime64[ns]"))
+        dates = long["date"].to_numpy(dtype="datetime64[ns]")[rows]
+        k = np.searchsorted(d, dates, side="right")  # relistings on or before the row
+        ids[rows] = permno + k * RELIST_ID_OFFSET
+    return ids
+
 
 def xnys_sessions(start, end) -> pd.DatetimeIndex:
     cal = xcals.get_calendar("XNYS", start=pd.Timestamp(start) - pd.Timedelta(days=7))
@@ -75,6 +98,22 @@ def coverage_report(long: pd.DataFrame, sessions: pd.DatetimeIndex,
     return rep
 
 
+def sp500_total_return(long: pd.DataFrame, sessions: pd.DatetimeIndex) -> pd.Series | None:
+    """S&P 500 total return rebuilt from the members: each day's member returns weighted by
+    the previous day's market cap. Checked against CRSP's official index on 1994-2019 using
+    price-only returns (cumulative +595% vs +593%). Unlike CRSP `sprtrn`, it includes
+    dividends, so it is a fair benchmark for total-return P&L. `long` is sorted by permno, date.
+    """
+    if "mktcap_k" not in long.columns:
+        return None
+    cap_prev = long.groupby("permno")["mktcap_k"].shift()
+    ok = long["member"] & long["ret"].notna() & (cap_prev > 0)
+    d = long.loc[ok, ["date", "ret"]].assign(cap=cap_prev[ok])
+    d["rc"] = d["ret"] * d["cap"]
+    g = d.groupby("date")[["rc", "cap"]].sum()
+    return (g["rc"] / g["cap"]).reindex(sessions).rename("S&P 500 (rebuilt, total return)")
+
+
 def load_sp500_panel(start, end, lake: Path | None = None, warmup_sessions: int = 0,
                      min_coverage: float = 0.85, min_year_coverage: float = 0.75,
                      unlock_reason: str | None = None) -> MarketPanel:
@@ -107,10 +146,16 @@ def load_sp500_panel(start, end, lake: Path | None = None, warmup_sessions: int 
     available = set(duckdb.sql(f"DESCRIBE SELECT * FROM read_parquet('{path}')").df()
                     ["column_name"])
     cols = ", ".join(f"d.{c}" for c in ["permno", "date", *PANEL_COLUMNS] if c in available)
+    extra = [c for c in ("sp500_ret",) if c in available]
     long = con.execute(f"""
-        SELECT {cols} FROM read_parquet('{path}') d JOIN ids USING (permno)
+        SELECT {cols}{"".join(f", d.{c}" for c in extra)}
+        FROM read_parquet('{path}') d JOIN ids USING (permno)
         WHERE d.date BETWEEN ? AND ? ORDER BY d.permno, d.date
     """, [lo, hi]).df()
+    relist = (con.execute(f"""
+        SELECT d.permno, d.date FROM read_parquet('{path}') d JOIN ids USING (permno)
+        WHERE d.relist""").df() if "relist" in available
+              else pd.DataFrame(columns=["permno", "date"]))
     con.close()
 
     long["date"] = pd.to_datetime(long["date"])
@@ -129,12 +174,19 @@ def load_sp500_panel(start, end, lake: Path | None = None, warmup_sessions: int 
         raise CoverageError(f"member-day coverage too low (overall {overall:.1%}, "
                             f"worst year {rep['coverage'].min():.1%}):\n{rep}")
 
-    # The first row of a permno inside the window has no prior close in the window:
+    long["asset"] = listing_asset_ids(long, relist)
+    # The first row of each listing inside the window has no prior close in the window:
     # its return is not needed (the total-return price is anchored there).
-    first = ~long.duplicated("permno")
+    first = ~long.duplicated("asset")
     long.loc[first, "ret"] = np.nan
-    long = long.rename(columns={"permno": "asset"})
-    panel = build_panel(long, sessions=sessions)
+    benchmark = sp500_total_return(long, sessions)
+    panel = build_panel(long.drop(columns="permno"), sessions=sessions)
+    gaps = relist[(relist["date"] > sessions[0]) & (relist["date"] <= sessions[-1])]
     panel.meta.update({"source": "crsp", "coverage": rep, "coverage_overall": overall,
-                       "warmup_sessions": warmup_sessions})
+                       "warmup_sessions": warmup_sessions, "permno": permno_of(panel.assets),
+                       "listing_gaps": gaps.reset_index(drop=True), "benchmark": benchmark})
+    if "sp500_ret" in long.columns:  # CRSP's S&P 500 *price* index return (no dividends)
+        panel.meta["sp500_price_return"] = (
+            long.dropna(subset=["sp500_ret"]).groupby("date")["sp500_ret"].first()
+            .reindex(sessions))
     return panel

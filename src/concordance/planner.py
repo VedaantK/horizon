@@ -45,7 +45,10 @@ def plan_orders(cash, pos, exec_price, mark_prev, fee_rate, weights, has_weights
             target = _round_qty(weights[j] * value / exec_price[j])
         else:
             continue
-        delta[j] = _round_qty(target - pos[j])
+        if target == 0.0:
+            delta[j] = -pos[j]  # a full exit sells exactly what is held: no float residue
+        else:
+            delta[j] = _round_qty(target - pos[j])
 
     # Cash after all sells, then check buys fit; scale them uniformly if not.
     cash_after = cash
