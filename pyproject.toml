@@ -16,6 +16,7 @@ dependencies = [
     "skfolio",
     "optuna",
     "quantstats",
+    "requests",
 ]
 
 [project.scripts]
