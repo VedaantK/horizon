@@ -85,7 +85,7 @@ def universe():
         "gvkey": ["000010", "000020", "000030", "000040", "000050", "000060", "000099"],
         "datadate": [T("2019-06-30")] * 7,
         "conm": ["CISCO SYSTEMS INC", "HP INC", "HELMERICH & PAYNE", "TINY CORP",
-                 "ACME CORP", "ACME CORP", "SUPPLIER INC"],
+                 "ACME CORP", "INTL BUSINESS MACHINES CORP", "SUPPLIER INC"],
         "tic": ["CSCO", "HPQ", "HP", "TNY", "ACM", "ACM2", "SUP"],
         "sale": [50e3, 60e3, 3e3, 10.0, 1e3, 1e3, 100.0],
     })
@@ -125,9 +125,18 @@ def test_exact_alias_ticker_precedence_and_review():
 
 def test_reused_name_resolved_by_link_valid_at_fiscal_date():
     funda, links, sp500 = universe()
+    funda = funda.assign(conm=funda["conm"].replace("INTL BUSINESS MACHINES CORP", "ACME CORP"))
     seg = seg_for(["Acme Corp", "Acme Corp"], dates=[T("2010-06-30"), T("2019-06-30")])
     m, _, _ = match_customers(seg, funda, links, sp500)
     assert m.sort_values("srcdate")["customer_gvkey"].tolist() == ["000050", "000060"]
+
+
+def test_abbreviated_company_names_match_through_aliases():
+    funda, links, sp500 = universe()
+    seg = seg_for(["International Business Machines Corp", "IBM"])
+    m, _, _ = match_customers(seg, funda, links, sp500)
+    assert m["customer_gvkey"].tolist() == ["000060", "000060"]
+    assert set(m["match"]) == {"alias"}
 
 
 def test_historical_names_only_count_near_their_years():

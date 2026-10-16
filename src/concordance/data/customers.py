@@ -48,7 +48,12 @@ SUFFIXES = {
 }
 # Short forms filers commonly use, keyed and valued by normalized names.
 ALIASES = {
-    "IBM": "INTERNATIONAL BUSINESS MACHINES",
+    # Compustat and CRSP both abbreviate IBM's name.
+    "IBM": "INTL BUSINESS MACHINES",
+    "INTERNATIONAL BUSINESS MACHINES": "INTL BUSINESS MACHINES",
+    "GEN MTR": "GENERAL MOTORS",
+    "GEN MTRS": "GENERAL MOTORS",
+    "FORD MTR": "FORD MOTOR",
     "GE": "GENERAL ELECTRIC",
     "GM": "GENERAL MOTORS",
     "HEWLETT PACKARD": "HP",
