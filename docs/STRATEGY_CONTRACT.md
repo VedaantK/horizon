@@ -69,6 +69,7 @@ resting orders). It can never act on the close it just saw.
 | `view.assets` | (N,) | asset ids (CRSP PERMNOs). Columns of every array follow this order. |
 | `view.date`, `view.i`, `view.sessions` | | today's date, session index, all dates so far |
 | `view.position` | | your own orders' state (below) |
+| `view.customer_weights(imputed=True)` | (N, N) | supplier x customer revenue shares known at this close (below). Needs `data.customer_links: true` in the run request. |
 
 Arrays are read-only and contain **NaN** wherever a security has no data (not listed yet,
 delisted, halted). Always guard: `np.isfinite(x)`. Row `-1` is today. The universe is every
@@ -84,6 +85,18 @@ day). Never compare a raw price level to a total-return price.
 
 These describe what your orders intended. The engines may hold less (cash or volume
 limits), never more.
+
+`view.customer_weights()` is built from each supplier's 10-K list of customers worth 10%+
+of revenue (Compustat customer segments, fiscal years 1998 on). Row = supplier, column =
+customer, value = that customer's share of the supplier's revenue (0.35 = 35%); zero where
+there is no link. A fiscal year's links appear at the first session after fiscal year-end
++ 6 months and vanish after + 18 months; a newer filing replaces the older one. Shares that
+were not disclosed are set to 0.10 (the disclosure threshold); `imputed=False` drops them.
+Customers are matched to S&P 500 companies only, so most rows sum to well under 1.
+Typical use: `w = view.customer_weights(); s = w.sum(1); cust_ret = (w @ np.nan_to_num(r))
+/ np.where(s > 0, s, np.nan)` (customers with a NaN return count as 0 there; mask them in
+`w` first if that matters). The matrix is read-only and cached, so calling it every session
+is cheap.
 
 `concordance.calendar.is_last_session_of_month(view.date)` is safe to use (the holiday
 calendar is published in advance).

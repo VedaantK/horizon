@@ -2,6 +2,7 @@
 
   concordance ingest RAW_DIR                 validate WRDS exports into the lake
   concordance permnos MEMBERSHIP_FILE         PERMNO list for the CRSP web-form upload
+  concordance link-customers                  point-in-time supplier -> customer links
   concordance run STRATEGY.py --start --end   run all engines, reconcile, validate, report
   concordance backtest REQUEST.json           the same, driven by a JSON request (docs/RUN_API.md)
   concordance reproduce RUN_DIR               re-run a saved run and check it matches
@@ -32,6 +33,14 @@ def cmd_ingest(a):
     from concordance.data.ingest import ingest
 
     print(json.dumps(ingest(Path(a.raw_dir), Path(a.lake) if a.lake else None), indent=2))
+
+
+def cmd_link_customers(a):
+    from concordance.data.customers import link_customers
+
+    entry = link_customers(Path(a.lake) if a.lake else None,
+                           Path(a.review) if a.review else None)
+    print(json.dumps(entry, indent=2, default=str))
 
 
 def cmd_permnos(a):
@@ -177,6 +186,13 @@ def main(argv=None):
     s.add_argument("raw_dir")
     s.add_argument("--lake")
     s.set_defaults(fn=cmd_ingest)
+
+    s = sub.add_parser("link-customers",
+                       help="match customer names and build lake/customer_links.parquet")
+    s.add_argument("--lake")
+    s.add_argument("--review", help="review CSV (default lake/customer_matches_review.csv); "
+                   "fill decision=accept/reject and rerun to apply")
+    s.set_defaults(fn=cmd_link_customers)
 
     s = sub.add_parser("permnos", help="PERMNO list file for the CRSP web-query upload")
     s.add_argument("membership_file")

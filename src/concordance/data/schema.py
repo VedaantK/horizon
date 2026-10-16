@@ -88,9 +88,28 @@ _FUNDA_COLS = [
 COMP_FUNDA = ExportSpec(
     name="comp_funda",
     wrds_table="comp.funda",
-    columns={c: c for c in _FUNDA_COLS},
+    columns={c: c for c in [*_FUNDA_COLS, "conm", "tic", "cusip", "indfmt", "curcd", "costat"]},
     required=("gvkey", "datadate", "fyear"),
     date_columns=("datadate",),
+)
+
+COMP_SEG_CUSTOMER = ExportSpec(
+    name="comp_seg_customer",
+    wrds_table="Compustat Historical Segments: Customer (comp_segments_hist_daily.seg_customer)",
+    columns={c: c for c in ("gvkey", "srcdate", "datadate", "conm", "tic", "cid", "cnms",
+                            "ctype", "salecs", "sid", "stype", "gareac", "gareat")},
+    required=("gvkey", "srcdate", "cnms", "ctype", "salecs"),
+    date_columns=("srcdate", "datadate"),
+)
+
+CRSP_NAMES = ExportSpec(
+    name="crsp_names",
+    wrds_table="CRSP stock names history (crsp.stocknames / v2 security info history)",
+    columns={"permno": "permno", "comnam": "name", "issuernm": "name", "namedt": "start",
+             "secinfostartdt": "start", "nameenddt": "end", "secinfoenddt": "end",
+             "ticker": "ticker"},
+    required=("permno", "name"),
+    date_columns=("start", "end"),
 )
 
 FF_DAILY = ExportSpec(
@@ -114,4 +133,4 @@ CRSP_DELIST = ExportSpec(
 
 # Delistings are ingested before the daily file, which uses them at listing gaps.
 ALL_SPECS = (CRSP_DELIST, CRSP_DAILY, SP500_MEMBERSHIP, CCM_LINK, COMP_FUNDQ, COMP_FUNDA,
-             FF_DAILY)
+             COMP_SEG_CUSTOMER, CRSP_NAMES, FF_DAILY)

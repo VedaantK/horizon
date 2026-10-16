@@ -126,6 +126,36 @@ if one ever appears (e.g. from the legacy file).
 
 ---
 
+## Customer links (supplier -> customer strategies)
+Three exports, saved in their own folder (e.g. `~/wrds_exports/customer/`). Ingest that
+folder by itself: datasets it doesn't contain keep their earlier ingest.
+
+| Save as | Menu | Settings |
+|---|---|---|
+| `comp_seg_customer.csv` | Compustat → North America → **Historical Segments → Customer** (not the non-historical Segments, which are restated and start in 2014) | Type the start date **1988-01-01** (data begins with fiscal 1998); search the entire database; variables `GVKEY`, `SRCDATE`, `CONM`, `TIC`, `CNMS`, `CTYPE`, `SALECS`, `CID`, `SID`, `STYPE`, `GAREAC`, `GAREAT` |
+| `ccm_link.csv` | CRSP/Compustat Merged → **Linking Table** | Start 1950-01-01; entire database; `GVKEY`, `LPERMNO`, `LINKTYPE`, `LINKPRIM`, `LINKDT`, `LINKENDDT` (Query 3 above) |
+| `comp_funda.csv` | Compustat → North America → **Fundamentals Annual** | Start **1997-01-01**; entire database; default screens; `GVKEY`, `DATADATE`, `FYEAR`, `CONM`, `TIC`, `CUSIP`, `SALE`, `REVT` |
+| `crsp_names.csv` (optional, improves matching) | CRSP → Stock → **Stock Header / Names** history | Widest dates; PERMNO, upload `permnos.txt`; `PERMNO`, `COMNAM` (or `IssuerNm`), `NAMEDT`, `NAMEENDDT`, `TICKER` |
+
+Then:
+```bash
+uv run concordance ingest ~/wrds_exports/customer
+uv run concordance link-customers
+```
+`link-customers` matches customer names to S&P 500 companies (exact normalized names and a
+short alias list automatically, resolved by the link valid at the fiscal date) and writes
+`lake/customer_matches_review.csv`, largest unmatched customers first. Put `accept` or
+`reject` in its `decision` column (and the `gvkey` to use when accepting), then rerun to
+apply. Compustat keeps only each company's current name, so without `crsp_names` renamed
+customers (AmerisourceBergen → Cencora, CVS Caremark → CVS Health) need review.
+
+The October 2026 customer export: 595,637 rows, fiscal 1998–2026; 1,046 rows had no
+`GVKEY` (dropped); 129,156 company rows were unnamed placeholders ("Not Reported",
+"5 Customers"). The fundamentals export included the financial-services format (`FS`)
+next to `INDL`; ingest keeps `INDL`.
+
+---
+
 ## What was actually downloaded (October 2026)
 - `sp500_membership.csv` was extracted from the S&P 500 Constituents form's output. That form
   also returns daily stock rows, but only for days inside each membership spell, so it can't
@@ -141,5 +171,7 @@ if one ever appears (e.g. from the legacy file).
 - [x] `ff_factors_daily.csv.gz`
 - [x] `crsp_delist_2020_2025.csv.gz`
 - [x] `crsp_delist_1990_2019.csv.gz`
-- [ ] `ccm_link.csv` (optional; may be unavailable)
+- [x] `ccm_link.csv`
+- [x] `comp_seg_customer.csv`, `comp_funda.csv` (customer links)
+- [ ] `crsp_names.csv` (optional; better customer-name matching)
 - [ ] `comp_fundq.csv` (optional for now)

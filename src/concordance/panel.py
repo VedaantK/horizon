@@ -35,6 +35,8 @@ class MarketPanel:
     liquidate: np.ndarray  # (T, N) bool forced full liquidation at the open of session i
     val_price: np.ndarray  # (T, N) forward-filled tr_close for valuation (NaN before first obs)
     meta: dict = field(default_factory=dict)
+    # Point-in-time supplier -> customer links (data/customers.py), when attached.
+    links: object = None
 
     @property
     def shape(self) -> tuple[int, int]:

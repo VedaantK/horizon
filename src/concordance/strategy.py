@@ -66,6 +66,16 @@ class PointInTimeView:
     def frame(self, name: str) -> pd.DataFrame:
         return pd.DataFrame(self[name], index=self.sessions, columns=self.assets)
 
+    def customer_weights(self, imputed: bool = True) -> np.ndarray:
+        """(N, N) read-only revenue shares known at this close: row = supplier, column =
+        customer (e.g. 0.35 = that customer bought 35% of the supplier's revenue). Zero where
+        no link is visible. `imputed=False` drops links whose share was not disclosed (they
+        are set to the 10% disclosure threshold). Needs `data.customer_links: true`."""
+        if self._panel.links is None:
+            raise LookaheadError("customer links are not loaded for this run: set "
+                                 "data.customer_links to true in the request")
+        return self._panel.links.weights_at(self.i, imputed)
+
     @property
     def members(self) -> np.ndarray:
         """Boolean mask of universe members on the decision session."""

@@ -23,7 +23,8 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
 {
   "run_id": "optional; default <UTC timestamp>-<random>",
   "strategy": {"path": "candidates/x/strategy.py", "params": {"lookback": 20}},
-  "data": {"universe": "sp500", "start": "2005-01-01", "end": "2019-12-31", "lake": null},
+  "data": {"universe": "sp500", "start": "2005-01-01", "end": "2019-12-31", "lake": null,
+           "customer_links": false},
   "initial_capital": 1000000,
   "engines": ["reference", "vectorbt", "nautilus"],
   "costs": {"commission_bps": 1.0, "default_half_spread_bps": 5.0,
@@ -36,6 +37,9 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
 }
 ```
 
+- `data.customer_links: true` loads `lake/customer_links.parquet` (built by
+  `concordance link-customers`) so the strategy can call `view.customer_weights()`. The
+  manifest records the file's SHA-256 and link counts.
 - `strategy.params` go to the file's `make_strategy(**params)` (docs/STRATEGY_CONTRACT.md).
   A relative `strategy.path` in a request file is relative to that file.
 - `data.start` is the first evaluated session; warm-up history before it is loaded

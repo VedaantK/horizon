@@ -23,7 +23,8 @@ Multi-engine backtester. Read `README.md` and `docs/SEMANTICS.md` first.
 - `api.py`: JSON run interface, artifacts, manifest, reproduce (docs/RUN_API.md)
 - `authoring/`: strategy validator and the Claude/Codex authoring driver; prompts in `prompts/`
 - `synthetic.py`: synthetic CRSP-shaped markets (tests, demo, validator)
-- `data/`: WRDS ingest, CRSP panels, point-in-time Compustat, lockbox
+- `data/`: WRDS ingest, CRSP panels, point-in-time Compustat, customer links
+  (`customers.py`: segments -> matched, point-in-time supplier x customer weights), lockbox
 - `validation/`: DSR, PBO/CPCV, placebo, lookahead, ledger
 - `events/`, `futures/`: EDGAR timing, Panama rolls
 - `hft/`: separate uv project (numpy<2.3) for hftbacktest

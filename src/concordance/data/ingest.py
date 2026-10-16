@@ -18,7 +18,9 @@ import pandas as pd
 from concordance.data.schema import (
     ALL_SPECS,
     CCM_LINK,
+    COMP_FUNDA,
     COMP_FUNDQ,
+    COMP_SEG_CUSTOMER,
     CRSP_DAILY,
     CRSP_DELIST,
     SP500_MEMBERSHIP,
@@ -263,7 +265,9 @@ def clean_ccm_link(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df[df["linktype"].isin(["LU", "LC"]) & df["linkprim"].isin(["P", "C"])]
     df = df.dropna(subset=["permno"])
     df["permno"] = df["permno"].astype("int64")
-    df["gvkey"] = df["gvkey"].astype(str).str.zfill(6)
+    from concordance.data.customers import gvkey_str
+
+    df["gvkey"] = gvkey_str(df["gvkey"])
     df["linkenddt"] = df["linkenddt"].fillna(OPEN_END)  # null / 'E' = still active
     df = df.drop_duplicates().reset_index(drop=True)
     return df, {"links": len(df)}
@@ -277,9 +281,16 @@ def clean_fundq(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
                                        "missing_rdq": int(df["rdq"].isna().sum())}
 
 
+def _customer_cleaners():
+    from concordance.data.customers import clean_funda, clean_seg_customer
+
+    return {COMP_FUNDA.name: clean_funda, COMP_SEG_CUSTOMER.name: clean_seg_customer}
+
+
 CLEANERS = {CRSP_DELIST.name: clean_delist, CRSP_DAILY.name: clean_crsp_daily,
             SP500_MEMBERSHIP.name: clean_membership,
-            CCM_LINK.name: clean_ccm_link, COMP_FUNDQ.name: clean_fundq}
+            CCM_LINK.name: clean_ccm_link, COMP_FUNDQ.name: clean_fundq,
+            **_customer_cleaners()}
 
 
 def _sha256(path: Path) -> str:
@@ -307,12 +318,21 @@ def ingest(raw_dir: Path, lake: Path | None = None) -> dict:
     """Ingest every export found in `raw_dir`. Returns the manifest (also saved to the lake)."""
     raw_dir, lake = Path(raw_dir), Path(lake or default_lake())
     lake.mkdir(parents=True, exist_ok=True)
+    mpath = lake / "manifest.json"
+    previous = json.loads(mpath.read_text()).get("files", {}) if mpath.exists() else {}
     manifest = {"ingested_at": datetime.now(UTC).isoformat(), "files": {}}
     cleaned: dict[str, pd.DataFrame] = {}
     for spec in ALL_SPECS:
         paths = find_exports(raw_dir, spec)
         if not paths:
-            manifest["files"][spec.name] = {"status": "missing"}
+            # Exports kept in another folder stay as they were ingested before.
+            old = previous.get(spec.name, {})
+            if old.get("status") == "ok" and (lake / f"{spec.name}.parquet").exists():
+                manifest["files"][spec.name] = {**old, "kept_from_previous_ingest": True}
+                if spec is CRSP_DELIST:
+                    cleaned[spec.name] = pd.read_parquet(lake / f"{spec.name}.parquet")
+            else:
+                manifest["files"][spec.name] = {"status": "missing"}
             continue
         df = read_exports(paths, spec)
         clean = CLEANERS.get(spec.name)
@@ -324,6 +344,9 @@ def ingest(raw_dir: Path, lake: Path | None = None) -> dict:
         df.to_parquet(lake / f"{spec.name}.parquet", index=False)
         manifest["files"][spec.name] = {
             "status": "ok", "sources": {p.name: _sha256(p) for p in paths}, **stats}
+    # Derived files (customer_links) are rebuilt by their own command; keep their entry.
+    for name, entry in previous.items():
+        manifest["files"].setdefault(name, entry)
     _flag_member_gaps(manifest, lake)
-    (lake / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    mpath.write_text(json.dumps(manifest, indent=2))
     return manifest
