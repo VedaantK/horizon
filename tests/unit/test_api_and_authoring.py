@@ -102,3 +102,28 @@ def test_author_refuses_specs_with_open_questions():
     spec["open_questions"] = ["raw or total-return prices?"]
     assert "open_questions" in check_spec(spec)[0]
     assert "missing 'name'" in check_spec({"hypothesis": "h"})
+
+
+def test_validator_accepts_month_end_calendar_helper(tmp_path):
+    # Synthetic markets used to include exchange holidays (e.g. Good Friday 2015), where
+    # is_last_session_of_month raised NotSessionError.
+    from concordance.authoring.validate import validate_file
+
+    src = tmp_path / "month_end.py"
+    src.write_text(
+        "import numpy as np\n"
+        "from concordance.calendar import is_last_session_of_month\n"
+        "from concordance.strategy import Strategy\n\n\n"
+        "class MonthEnd(Strategy):\n"
+        "    name = 'month_end'\n\n"
+        "    def __init__(self):\n"
+        "        self.params = {}\n\n"
+        "    def decide(self, view):\n"
+        "        if not is_last_session_of_month(view.date):\n"
+        "            return None\n"
+        "        ok = view.members & np.isfinite(view['tr_close'][-1])\n"
+        "        return np.where(ok, 0.9 / max(ok.sum(), 1), 0.0)\n\n\n"
+        "def make_strategy(**params):\n"
+        "    return MonthEnd(**params)\n")
+    report = validate_file(src)
+    assert report["ok"], report["errors"]

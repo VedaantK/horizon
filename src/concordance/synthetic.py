@@ -6,6 +6,8 @@ high/low, zero or missing volume. Used by the tests, the demo and the strategy v
 import numpy as np
 import pandas as pd
 
+from concordance.calendar import calendar
+
 
 def random_long_frame(seed: int, n_assets: int | None = None, n_sessions: int | None = None,
                       halt_rate: float = 0.06, missing_open_rate: float = 0.03):
@@ -14,7 +16,9 @@ def random_long_frame(seed: int, n_assets: int | None = None, n_sessions: int | 
     rng = np.random.default_rng(seed)
     N = n_assets or int(rng.integers(2, 9))
     T = n_sessions or int(rng.integers(15, 60))
-    dates = pd.bdate_range("2015-01-02", periods=T)
+    # Real XNYS sessions (not every weekday), so calendar helpers such as
+    # is_last_session_of_month behave as they do on CRSP data.
+    dates = pd.DatetimeIndex(calendar().sessions_window("2015-01-02", T)).tz_localize(None)
     rows = []
     for j in range(N):
         start = int(rng.integers(0, T // 3))
