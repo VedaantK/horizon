@@ -37,6 +37,8 @@ import pandas as pd
 AVAILABLE_LAG = pd.DateOffset(months=6)
 EXPIRY = pd.DateOffset(months=18)
 IMPUTED_SHARE = 0.10  # disclosure threshold, used when a customer's sales are not given
+NAME_EARLY = pd.DateOffset(years=1)  # a new name may appear in the fiscal year it's adopted
+NAME_LATE = pd.DateOffset(years=3)  # filers keep using an old customer name for a while
 FUZZY_MIN = 0.86  # review suggestions only; never used without the user's acceptance
 
 SUFFIXES = {
@@ -72,7 +74,8 @@ def normalize_name(name) -> str:
     """Upper case, '&' -> AND, punctuation dropped, legal suffixes removed."""
     if not isinstance(name, str):
         return ""
-    s = name.upper().replace("&", " AND ")
+    s = re.sub(r"\(LAST KNOWN\)", " ", name.upper())  # CRSP tag on a final name record
+    s = s.replace("&", " AND ")
     s = re.sub(r"[^A-Z0-9 ]", " ", s)
     toks = s.split()
     while toks and toks[-1] in SUFFIXES:
@@ -190,21 +193,31 @@ def candidate_names(funda: pd.DataFrame, links: pd.DataFrame, sp500: pd.DataFram
     f = funda[funda["gvkey"].isin(gv)]
     names = []
     if crsp_names is not None and len(crsp_names):
-        h = crsp_names[["permno", "name"]].dropna().drop_duplicates()
+        cols = [c for c in ("permno", "name", "start", "end") if c in crsp_names.columns]
+        h = crsp_names[cols].dropna(subset=["name"]).drop_duplicates()
         h = h.merge(lk[["gvkey", "permno"]].drop_duplicates(), on="permno")
-        h = h[h["gvkey"].isin(gv)][["gvkey", "name"]].assign(source="crsp_name")
-        names.append(h)
+        keep = ["gvkey", "name", *[c for c in ("start", "end") if c in h.columns]]
+        names.append(h[h["gvkey"].isin(gv)][keep].assign(source="crsp_name"))
     for col in ("conm", "tic"):
         if col in f.columns:
             v = f[["gvkey", col]].dropna().rename(columns={col: "name"})
             v["source"] = col
             names.append(v)
-    c = pd.concat(names, ignore_index=True).drop_duplicates(["gvkey", "name"])
+    c = pd.concat(names, ignore_index=True)
+    for col in ("start", "end"):
+        c[col] = pd.to_datetime(c[col]) if col in c else pd.NaT
     c["norm"] = c["name"].map(normalize_name)
     tic = c["source"] == "tic"
     # Tickers only count when they look like a name a filer would write (IBM, AT&T...).
     c = c[(c["norm"] != "") & (~tic | (c["norm"].str.len() >= 2))]
-    return c.drop_duplicates(["gvkey", "norm"]).reset_index(drop=True)
+    # One row per (gvkey, name, dated?): the years CRSP shows a name in use, or no dates
+    # for Compustat's current name and ticker (always usable).
+    always = c["start"].isna()
+    dated = c[~always].groupby(["gvkey", "norm"], as_index=False).agg(
+        name=("name", "first"), source=("source", "first"), start=("start", "min"),
+        end=("end", "max"))
+    undated = c[always].drop_duplicates(["gvkey", "norm"])
+    return pd.concat([undated, dated], ignore_index=True).reset_index(drop=True)
 
 
 def _compact(s: pd.Series) -> pd.Series:
@@ -223,7 +236,7 @@ def match_customers(seg: pd.DataFrame, funda: pd.DataFrame, links: pd.DataFrame,
     cand = candidate_names(funda, links, sp500, crsp_names)
     lk = _valid_links(links, set(cand["gvkey"]))
     seg = seg.copy()
-    seg["norm"] = seg["cnms"].map(normalize_name).map(_alias)
+    seg["norm"] = seg["cnms"].map(normalize_name)
     def index(c: pd.DataFrame, key: pd.Series) -> dict:
         return c.assign(k=key).groupby("k")["gvkey"].agg(lambda s: sorted(set(s))).to_dict()
 
@@ -241,22 +254,51 @@ def match_customers(seg: pd.DataFrame, funda: pd.DataFrame, links: pd.DataFrame,
                 return hit
         return []
 
+    # The name as written first; the alias list only when that finds nothing (the name
+    # history knows "HEWLETT PACKARD CO" with its own dates, so it beats the "HP" alias).
     names = seg[["cnms", "norm"]].drop_duplicates()
     names["cands"] = names["norm"].map(gv_for)
-    seg = seg.merge(names[["cnms", "cands"]], on="cnms", how="left")
+    retry = (names["cands"].str.len() == 0) & (names["norm"].map(_alias) != names["norm"])
+    names.loc[retry, "norm"] = names.loc[retry, "norm"].map(_alias)
+    names.loc[retry, "cands"] = names.loc[retry, "norm"].map(gv_for)
+    seg = seg.drop(columns="norm").merge(names[["cnms", "norm", "cands"]], on="cnms",
+                                         how="left")
 
     # Resolve each row's exact-name candidates by the link valid at its fiscal date.
     one = seg[seg["cands"].str.len() >= 1].explode("cands").rename(columns={"cands": "cg"})
     one = one.reset_index(names="_r").merge(lk.rename(columns={"gvkey": "cg"}), on="cg")
     one = one[(one["srcdate"] >= one["linkdt"]) & (one["srcdate"] <= one["linkenddt"])]
-    n_valid = one.groupby("_r")["cg"].nunique()
+    # Score each candidate by how its name fits the filing date:
+    #   2  a CRSP name in use then (within -1y / +3y): breaks ties, e.g. "AT&T Corp" in 2003
+    #      is the old AT&T, not SBC, whose current name became AT&T Inc only in 2005
+    #   1  Compustat's current name or ticker
+    #   0  a CRSP name used long before or after: never automatic ("American Family" in a
+    #      2005 filing is not Aflac, which dropped that name around 1990); it is suggested for
+    #      review instead, since filers do keep old names ("Wal-Mart Stores" after 2018).
+    #   0.5 a ticker (only when no company name fits)
+    windows = cand.assign(key=_compact(cand["norm"]))[["gvkey", "key", "start", "end",
+                                                       "source"]]
+    one = one.assign(key=_compact(one["norm"])).merge(
+        windows.rename(columns={"gvkey": "cg"}), on=["cg", "key"], how="left")
+    in_use = (one["srcdate"] >= one["start"] - NAME_EARLY) & (
+        one["srcdate"] <= one["end"] + NAME_LATE)
+    undated = np.where(one["source"] == "tic", 0.5, 1.0)
+    one["score"] = np.where(one["start"].isna(), undated, np.where(in_use, 2.0, 0.0))
+    one = one.sort_values("score").drop_duplicates(["_r", "cg"], keep="last")
+    best = one.groupby("_r")["score"].transform("max")
+    top = one[(one["score"] == best) & (best > 0)]
+    n_valid = top.groupby("_r")["cg"].nunique()
     unique_r = n_valid[n_valid == 1].index
-    pick = one[one["_r"].isin(unique_r)].drop_duplicates("_r").set_index("_r")["cg"]
+    pick = top[top["_r"].isin(unique_r)].drop_duplicates("_r").set_index("_r")["cg"]
     seg["customer_gvkey"] = pick.reindex(seg.index)
     aliased = seg["cnms"].map(normalize_name) != seg["norm"]
     seg["match"] = np.where(seg["customer_gvkey"].notna(),
                             np.where(aliased, "alias", "exact"), None)
     ambiguous_r = set(n_valid[n_valid > 1].index)
+    stale = one[(best == 0)].drop_duplicates("_r")
+    stale = stale[~stale["_r"].isin(stale["_r"][stale.duplicated("_r")])]
+    stale_names = (seg.loc[stale["_r"], "cnms"].to_frame().assign(g=stale["cg"].to_numpy())
+                   .drop_duplicates("cnms").set_index("cnms")["g"])
 
     # Everything unresolved is reviewed by name, ranked by disclosed sales.
     left = seg[seg["customer_gvkey"].isna()]
@@ -266,6 +308,13 @@ def match_customers(seg: pd.DataFrame, funda: pd.DataFrame, links: pd.DataFrame,
                                    first_year=("srcdate", "min"), last_year=("srcdate", "max"))
     rev["ambiguous"] = rev.index.isin(set(seg.loc[sorted(ambiguous_r), "cnms"]))
     sug = _suggest(rev["norm"], cand)
+    # An exact but out-of-date historical name is the strongest suggestion.
+    conm = cand.drop_duplicates("gvkey").set_index("gvkey")["name"]
+    st = stale_names.reindex(rev.index).dropna()
+    sug = sug.reindex(rev.index)
+    sug.loc[st.index, "suggested_gvkey"] = st
+    sug.loc[st.index, "suggested_name"] = st.map(conm) + " (older name)"
+    sug.loc[st.index, "score"] = 1.0
     rev = rev.join(sug).reset_index().rename(columns={"cnms": "customer_name"})
     rev["decision"], rev["gvkey"] = "", rev["suggested_gvkey"].fillna("")
     if decisions is not None and len(decisions):

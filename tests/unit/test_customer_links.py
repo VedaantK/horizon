@@ -36,6 +36,7 @@ def test_normalize_names_and_unnamed_placeholders():
     assert normalize_name("Wal-Mart Stores, Inc.") == "WAL MART STORES"
     assert normalize_name("AT&T Inc") == "AT AND T"
     assert normalize_name(None) == ""
+    assert normalize_name("WALGREENS BOOTS ALLIANCE INC (Last Known)") == "WALGREENS BOOTS ALLIANCE"
     for s in ("NOT REPORTED", "5 CUSTOMERS", "TWO MAJOR CUSTOMERS", "CUSTOMER A",
               "OTHERS", "LARGEST CUSTOMER"):
         assert UNNAMED.fullmatch(s), s
@@ -127,6 +128,34 @@ def test_reused_name_resolved_by_link_valid_at_fiscal_date():
     seg = seg_for(["Acme Corp", "Acme Corp"], dates=[T("2010-06-30"), T("2019-06-30")])
     m, _, _ = match_customers(seg, funda, links, sp500)
     assert m.sort_values("srcdate")["customer_gvkey"].tolist() == ["000050", "000060"]
+
+
+def test_historical_names_only_count_near_their_years():
+    funda, links, sp500 = universe()
+    # Cisco once traded as "Old Cisco Name" until 2000 (made-up example).
+    names = pd.DataFrame({"permno": [100], "name": ["OLD CISCO NAME INC"],
+                          "start": [T("1990-01-01")], "end": [T("2000-12-31")]})
+    seg = seg_for(["Old Cisco Name", "Old Cisco Name"], dates=[T("2002-06-30"),
+                                                                T("2010-06-30")])
+    m, rev, _ = match_customers(seg, funda, links, sp500, crsp_names=names)
+    # 2002 is within 3 years of the name's last use: automatic. 2010 is not: it goes to
+    # review with Cisco suggested, never matched without a decision.
+    assert m["srcdate"].tolist() == [T("2002-06-30")]
+    assert m["customer_gvkey"].tolist() == ["000010"]
+    r = rev.set_index("customer_name").loc["Old Cisco Name"]
+    assert r["suggested_gvkey"] == "000010" and "older name" in r["suggested_name"]
+
+
+def test_name_in_use_beats_a_current_name_that_came_later():
+    funda, links, sp500 = universe()
+    # gvkey 000020 is called "HP INC" today. Suppose another company (000030) used the name
+    # "HP Inc" in 2000-2006. In 2005 the dated, in-use name wins; in 2018 that name has
+    # lapsed, so only 000020's current name fits.
+    names = pd.DataFrame({"permno": [300], "name": ["HP INC"], "start": [T("2000-01-01")],
+                          "end": [T("2006-12-31")]})
+    seg = seg_for(["HP Inc", "HP Inc"], dates=[T("2005-06-30"), T("2018-06-30")])
+    m, _, _ = match_customers(seg, funda, links, sp500, crsp_names=names)
+    assert m.sort_values("srcdate")["customer_gvkey"].tolist() == ["000030", "000020"]
 
 
 def test_review_decisions_accept_and_reject():
