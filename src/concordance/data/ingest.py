@@ -273,12 +273,38 @@ def clean_ccm_link(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df, {"links": len(df)}
 
 
+def resolve_fiscal_year_changes(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """A fiscal year-end change makes Compustat list one quarter end twice, under the old
+    and the new fiscal calendar. Keep the row with the most values (ties: the earlier
+    fiscal year) and give it the later report date of the pair, so it is never visible
+    before both versions were public."""
+    keys = ["gvkey", "datadate"]
+    dup = df.duplicated(keys, keep=False)
+    if not dup.any():
+        return df, 0
+    d = df.loc[dup].copy()
+    d["_n"] = d.notna().sum(axis=1)
+    latest_rdq = d.groupby(keys)["rdq"].transform("max")
+    d = d.sort_values([*keys, "_n", "fyearq"], ascending=[True, True, False, True])
+    keep = d.drop_duplicates(keys, keep="first")
+    keep = keep.assign(rdq=latest_rdq.loc[keep.index]).drop(columns="_n")
+    out = pd.concat([df.loc[~dup], keep]).sort_values(keys)
+    return out, int(dup.sum() - len(keep))
+
+
 def clean_fundq(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df.copy()
     df["gvkey"] = df["gvkey"].astype(str).str.zfill(6)
-    df, n_dup = _dedupe(df, ["gvkey", "datadate"], "comp_fundq")
-    return df.reset_index(drop=True), {"rows": len(df), "exact_duplicates_dropped": n_dup,
-                                       "missing_rdq": int(df["rdq"].isna().sum())}
+    exact = df.duplicated(keep="first")
+    df = df.loc[~exact]
+    df, n_fy = resolve_fiscal_year_changes(df)
+    df, _ = _dedupe(df, ["gvkey", "datadate"], "comp_fundq")
+    stats = {"rows": len(df), "exact_duplicates_dropped": int(exact.sum()),
+             "fiscal_year_change_duplicates_resolved": n_fy,
+             "missing_rdq": int(df["rdq"].isna().sum())}
+    if "curcdq" in df:
+        stats["non_usd_rows"] = int((df["curcdq"].notna() & (df["curcdq"] != "USD")).sum())
+    return df.reset_index(drop=True), stats
 
 
 def _customer_cleaners():

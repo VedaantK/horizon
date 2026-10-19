@@ -138,6 +138,7 @@ def _child(path: str, params: dict | None, real_window: tuple[str, str] | None) 
     from concordance.api import StrategyError, load_strategy
     from concordance.costs import CostModel, LiquidityModel, exec_tables
     from concordance.data.customers import random_links
+    from concordance.data.fundamentals import random_fundamentals
     from concordance.panel import build_panel
     from concordance.reconcile import reconcile
     from concordance.runner import ALL_ENGINES, run_engine
@@ -196,6 +197,7 @@ def _child(path: str, params: dict | None, real_window: tuple[str, str] | None) 
         panel = build_panel(random_long_frame(seed, n_assets=50, n_sessions=T,
                                               halt_rate=halts, missing_open_rate=no_open))
         panel = random_links(panel, seed)  # exercises view.customer_weights()
+        panel = random_fundamentals(panel, seed)  # exercises view.fundamental()
         tag = f"synthetic market {k + 1} ({kind}: {T} sessions x 50 assets)"
         t0 = time.perf_counter()
         try:
@@ -273,6 +275,10 @@ def _child(path: str, params: dict | None, real_window: tuple[str, str] | None) 
                 from concordance.data.customers import attach_customer_links
 
                 panel = attach_customer_links(panel)
+            if "fundamental(" in Path(path).read_text():
+                from concordance.data.fundamentals import attach_fundamentals
+
+                panel = attach_fundamentals(panel)
             sched = build_schedule(fresh(), panel)
             tables = exec_tables(panel, CostModel(commission_bps=1.0), liq)
             r = run_engine("reference", panel, sched, tables, 1e6)

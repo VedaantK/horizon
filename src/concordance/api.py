@@ -42,7 +42,7 @@ DEFAULTS: dict = {
     "run_id": None,
     "strategy": {"path": None, "params": {}},
     "data": {"universe": "sp500", "start": None, "end": None, "lake": None,
-             "customer_links": False},
+             "customer_links": False, "fundamentals": False},
     "initial_capital": 1_000_000.0,
     "engines": list(ENGINES),
     "costs": {"commission_bps": 1.0, "default_half_spread_bps": 5.0,
@@ -136,8 +136,9 @@ def resolve_request(request: dict) -> dict:
             pd.Timestamp(req["data"][k])
         except ValueError as e:
             raise RequestError(f"data.{k}: {e}") from e
-    if not isinstance(req["data"]["customer_links"], bool):
-        raise RequestError("data.customer_links must be true or false")
+    for flag in ("customer_links", "fundamentals"):
+        if not isinstance(req["data"][flag], bool):
+            raise RequestError(f"data.{flag} must be true or false")
     if pd.Timestamp(req["data"]["start"]) >= pd.Timestamp(req["data"]["end"]):
         raise RequestError("data.start must be before data.end")
     bad = set(req["engines"]) - set(ENGINES)
@@ -343,6 +344,12 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
         panel = attach_customer_links(panel, lake)
         data["customer_links"] = {**panel.meta["customer_links"],
                                   "sha256": _sha256_file(lake / "customer_links.parquet")}
+    if req["data"]["fundamentals"]:
+        from concordance.data.fundamentals import attach_fundamentals
+
+        panel = attach_fundamentals(panel, lake)
+        data["fundamentals"] = {**panel.meta["fundamentals"],
+                                "sha256": _sha256_file(lake / "comp_fundq.parquet")}
     return panel, lake, data
 
 

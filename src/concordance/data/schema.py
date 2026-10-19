@@ -70,7 +70,7 @@ CCM_LINK = ExportSpec(
 _FUNDQ_COLS = [
     "gvkey", "datadate", "fyearq", "fqtr", "rdq", "atq", "ltq", "seqq", "ceqq", "saleq",
     "revtq", "cogsq", "xsgaq", "ibq", "niq", "oiadpq", "txditcq", "pstkq", "cshoq", "prccq",
-    "oancfy", "capxy", "dlttq", "dlcq", "cheq", "actq", "lctq", "xrdq",
+    "oancfy", "capxy", "dlttq", "dlcq", "cheq", "actq", "lctq", "xrdq", "curcdq",
 ]
 COMP_FUNDQ = ExportSpec(
     name="comp_fundq",

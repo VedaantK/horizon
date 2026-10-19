@@ -70,6 +70,7 @@ resting orders). It can never act on the close it just saw.
 | `view.date`, `view.i`, `view.sessions` | | today's date, session index, all dates so far |
 | `view.position` | | your own orders' state (below) |
 | `view.customer_weights(imputed=True)` | (N, N) | supplier x customer revenue shares known at this close (below). Needs `data.customer_links: true` in the run request. |
+| `view.fundamental(name)` | (i+1, N) | Compustat quarterly value known at each close so far (below). Needs `data.fundamentals: true` in the run request. |
 
 Arrays are read-only and contain **NaN** wherever a security has no data (not listed yet,
 delisted, halted). Always guard: `np.isfinite(x)`. Row `-1` is today. The universe is every
@@ -97,6 +98,27 @@ Typical use: `w = view.customer_weights(); s = w.sum(1); cust_ret = (w @ np.nan_
 / np.where(s > 0, s, np.nan)` (customers with a NaN return count as 0 there; mask them in
 `w` first if that matters). The matrix is read-only and cached, so calling it every session
 is cheap.
+
+`view.fundamental(name)` serves Compustat quarterly fundamentals (fiscal 1992 on), in $
+millions, point in time:
+- **Balance sheet, as of the quarter end:** `atq` total assets, `ltq` liabilities, `seqq`
+  stockholders' equity, `ceqq` common equity, `cheq` cash, `actq` / `lctq` current assets /
+  liabilities, `dlttq` / `dlcq` long-term / current debt, `pstkq` preferred stock, `txditcq`
+  deferred taxes, `cshoq` shares outstanding (millions), `prccq` quarter-end price.
+- **Flows, single quarter:** `revtq` revenue, `saleq` sales, `cogsq` cost of goods sold
+  (Compustat excludes depreciation), `xsgaq` SG&A, `ibq` income before extraordinary items,
+  `niq` net income, `oiadpq` operating income after depreciation, `xrdq` R&D, `oancfq`
+  operating cash flow, `capxq` capital expenditure.
+- **`<flow>_ttm`:** the last four quarters summed (e.g. `revtq_ttm`), NaN unless all four are
+  present and consecutive.
+
+A quarter becomes visible at the close of the first session after its report date (`rdq`;
+quarter end + 90 days when Compustat has none, ~4% of quarters). It stays until a newer
+quarter is reported, or until it is 275 days past its quarter end (then NaN). Every name
+reads from the stock's newest visible quarter, with no fallback to an older one, so ratios
+like `(view.fundamental("revtq_ttm") - view.fundamental("cogsq_ttm")) / view.fundamental("atq")`
+use one quarter. Values are Compustat's current (restated) figures, not as first reported.
+Arrays are read-only and cached, so calling them every session is cheap; `[-1]` is today.
 
 `concordance.calendar.is_last_session_of_month(view.date)` is safe to use (the holiday
 calendar is published in advance).

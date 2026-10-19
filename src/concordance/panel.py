@@ -37,6 +37,8 @@ class MarketPanel:
     meta: dict = field(default_factory=dict)
     # Point-in-time supplier -> customer links (data/customers.py), when attached.
     links: object = None
+    # Point-in-time quarterly fundamentals (data/fundamentals.py), when attached.
+    fundamentals: object = None
 
     @property
     def shape(self) -> tuple[int, int]:

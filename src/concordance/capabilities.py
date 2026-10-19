@@ -11,6 +11,8 @@ import json
 from dataclasses import fields
 from pathlib import Path
 
+from concordance.data.fundamentals import VIEW_FIELDS
+
 SCHEMA_VERSION = 1
 
 # Order fields that only apply to long positions (strategy.build_schedule rejects the rest).
@@ -25,8 +27,8 @@ NOT_SUPPORTED = [
     "stop-loss, take-profit or limit orders on short positions",
     "per-stock borrow fees, locate limits or short-sale bans (borrow is a flat fee)",
     "maintenance-margin calls",
-    "fundamentals, earnings dates or analyst data in the strategy view "
-    "(Compustat is used only for customer links)",
+    "annual fundamentals, as-first-reported (unrestated) figures, earnings-announcement "
+    "events or analyst data in the strategy view (quarterly Compustat values are restated)",
     "options, futures, ETFs, bonds or currencies",
 ]
 
@@ -60,6 +62,11 @@ def capabilities(lake: str | Path | None = None) -> dict:
             "position": "what the strategy's own orders hold (entry session/price, levels)",
             "customer_weights": "supplier -> customer revenue shares known at the close; "
                                 "needs data.customer_links: true",
+            "fundamental": "view.fundamental(name) -> (sessions, assets) Compustat quarterly "
+                           "values known at each close ($ millions; quarter visible from the "
+                           "session after its report date, stale after 275 days; NaN where "
+                           "unknown; fiscal 1992 on); needs data.fundamentals: true. Names: "
+                           + ", ".join(VIEW_FIELDS),
         },
         "weights": {"max_net": MAX_NET, "max_gross": MAX_GROSS, "short_selling": True},
         "orders": {"fields": order_fields,

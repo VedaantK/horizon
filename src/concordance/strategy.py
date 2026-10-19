@@ -76,6 +76,17 @@ class PointInTimeView:
                                  "data.customer_links to true in the request")
         return self._panel.links.weights_at(self.i, imputed)
 
+    def fundamental(self, name: str) -> np.ndarray:
+        """(i+1, N) read-only Compustat quarterly value known at each close so far, e.g.
+        "atq" (total assets), "revtq_ttm" (revenue, last four quarters). A quarter is visible
+        from the first session after its report date (rdq; quarter end + 90 days if missing),
+        until a newer quarter is reported or it is 275 days old. NaN where unknown. Values
+        in $ millions. Needs `data.fundamentals: true`."""
+        if self._panel.fundamentals is None:
+            raise LookaheadError("fundamentals are not loaded for this run: set "
+                                 "data.fundamentals to true in the request")
+        return self._cut(self._panel.fundamentals.matrix(name, self._panel))
+
     @property
     def members(self) -> np.ndarray:
         """Boolean mask of universe members on the decision session."""
