@@ -6,7 +6,10 @@ money is stored at 1e-9 in Nautilus, so each fill may contribute up to 1e-9 of d
 That drift can tip an order size that sits on a half step of the 1e-6 quantity grid to the
 neighbouring step ("grid flip"). A fill may therefore differ by one step, plus:
 - the position gap the asset already had (closing a position closes what each engine
-  holds), and
+  holds),
+- at the open, `|position after| x G_V / V`: targets are w x V / price, so a gap G_V in the
+  pre-trade value V (the carried cash gap plus open position gaps at their marks) moves
+  every target in proportion, and
 - on a session whose buys were scaled to fit cash, one more step (the scaled size is
   rounded down) plus `|qty| x G / B`: the scale factor is cash after sells over buy cost B,
   so a gap G in either moves every scaled buy in proportion. G = the cash gap carried into
@@ -85,7 +88,7 @@ def _compare(a: BacktestResult, b: BacktestResult,
     both = m[m["_merge"] == "both"]
     dq = (both["qty_a"] - both["qty_b"]).abs()
     fee_gap = (both["fee_a"] - both["fee_b"]).abs()
-    allowed = _qty_allowance(a, b, both, dq, fee_gap)
+    allowed = _qty_allowance(a, b, both, dq, fee_gap, marks)
     flip = (dq > QTY_TOL) & (dq <= allowed + QTY_TOL)
     for _, r in both[dq > allowed + QTY_TOL].head(10).iterrows():
         chk.problems.append(f"qty differs {sessions[int(r['session'])].date()} "
@@ -157,7 +160,8 @@ def _compare(a: BacktestResult, b: BacktestResult,
 
 
 def _qty_allowance(a: BacktestResult, b: BacktestResult, both: pd.DataFrame,
-                   dq: pd.Series, fee_gap: pd.Series) -> np.ndarray:
+                   dq: pd.Series, fee_gap: pd.Series,
+                   marks: np.ndarray | None = None) -> np.ndarray:
     """Largest quantity gap each matched fill may have (see the module docstring). Uses the
     gaps actually observed before the fill; those are checked in their own right."""
     T = len(a.sessions)
@@ -166,6 +170,20 @@ def _qty_allowance(a: BacktestResult, b: BacktestResult, both: pd.DataFrame,
     prev = np.maximum(s - 1, 0)
     pos_gap = np.where(s > 0, np.abs(a.positions[prev, j] - b.positions[prev, j]), 0.0)
     allowed = QTY_STEP + pos_gap
+    # Value gap carried into each open: cash gap + open position gaps at their marks
+    # (without marks, the observed equity gap).
+    gap_v = np.zeros(T)
+    if marks is not None:
+        held_gap = np.nansum(np.abs(a.positions - b.positions) * np.abs(marks), axis=1)
+        gap_v[1:] = np.abs(a.cash[:-1] - b.cash[:-1]) + held_gap[:-1]
+    else:
+        gap_v[1:] = np.abs(a.equity[:-1] - b.equity[:-1])
+    value = np.ones(T)
+    value[1:] = np.abs(a.equity[:-1])
+    at_open = both["phase"].to_numpy() == 0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        target_shift = np.abs(a.positions[s, j]) * gap_v[s] / value[s]
+    allowed = allowed + np.where(at_open & (s > 0), np.nan_to_num(target_shift), 0.0)
     scaled = np.zeros(T, dtype=bool)
     scaled[list(a.scaled_sessions)] = True
     buy = both["qty_a"].to_numpy() > 0

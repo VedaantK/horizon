@@ -213,7 +213,11 @@ in proportion, so a scaled buy may also differ by `|qty| * G / B + 1e-6`, where 
 observed cash gap at the previous close, plus the money of the session's differing sells,
 plus `Σ_buys price * 1e-6 * (1 + fee rate)` (any pre-scaling buy size may have flipped,
 which moves `B`); the extra step covers the rounding-down of the scaled size. A sale that closes a position
-may differ by the position gap the asset already had. These differences add their money to
+may differ by the position gap the asset already had. Any fill at the open may also differ
+by `|position after| * G_V / V`: targets are `w * V_pre / price`, so a gap `G_V` in the
+pre-trade value (the cash gap plus open position gaps at their marks, at the previous
+close) moves every target in proportion (seen on an EWO/RSI variant: a 525-share buy on a
+~$30k account moved 2 steps on a $0.0001 value gap). These differences add their money to
 the cash/equity allowance exactly like flips. Seen on real CRSP data: a weekly reversal
 strategy on $100k, 2000–2022, where 2008 buys of a few thousand dollars moved 2–3 steps (allowances there: median 3.5
 steps, at most 240 steps = $0.03 of stock).

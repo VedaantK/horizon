@@ -67,13 +67,14 @@ def test_a_flip_does_not_excuse_unexplained_cash():
     assert "cash diverges" in out.summary()
 
 
-def scaled_pair(a_steps, scaled=True):
+def scaled_pair(a_steps, scaled=True, cash0=CASH0):
     """s0: X flips by one step at $200, leaving a $0.0002 cash gap. s1: both engines buy A
     at $100 with buys scaled to fit cash; the reference buys `a_steps` grid steps more.
     Scale factor k = cash / buy cost B, so a gap G moves A by |qty| x G / B. G = the carried
     cash gap 0.0002 + one step of the session's one buy at $100 (B itself may differ by
     that) = 0.0003, so 300 x 0.0003 / 30,000 = 3e-6 (three steps); plus one step for a
-    flip and one for the rounding-down of the scaled size -> up to five steps."""
+    flip and one for the rounding-down of the scaled size -> five steps; plus the value gap
+    moving the target itself, 300 x 0.0004 / 100,000 = 1.2e-6 -> up to 6.2 steps."""
     sessions = pd.bdate_range("2008-11-10", periods=3)
     assets = pd.Index(["X", "A"])
     out = {}
@@ -81,8 +82,8 @@ def scaled_pair(a_steps, scaled=True):
                          ("nautilus", 10.0, 300.0)):
         fills = pd.DataFrame([(0, 0, 0, x, 200.0, 0.0), (1, 0, 1, a, 100.0, 0.0)],
                              columns=FILL_COLUMNS)
-        cash = np.array([CASH0 - 200 * x, CASH0 - 200 * x - 100 * a,
-                         CASH0 - 200 * x - 100 * a])
+        cash = np.array([cash0 - 200 * x, cash0 - 200 * x - 100 * a,
+                         cash0 - 200 * x - 100 * a])
         pos = np.array([[x, 0.0], [x, a], [x, a]])
         marks = np.array([[200.0, 100.0]] * 3)
         equity = cash + (pos * marks).sum(axis=1)
@@ -97,12 +98,20 @@ def test_a_carried_cash_gap_moves_scaled_buys_in_proportion():
 
 
 def test_more_than_the_carried_gap_explains_fails():
-    results, marks = scaled_pair(6)
+    results, marks = scaled_pair(7)
     out = reconcile(results, marks)
     assert not out.ok and "qty differs" in out.summary()
 
 
-def test_without_scaling_a_cash_gap_explains_nothing():
+def test_without_scaling_only_the_value_gap_moves_targets():
+    # Unscaled, A's target is w x V / price. The value gap carried into s1 is the cash gap
+    # 0.0002 + the open X gap 1e-6 x $200 = 0.0004. On V = $100,000 that moves 300 shares
+    # by 300 x 0.0004 / 100,000 = 1.2e-6: up to 2.2 steps with the flip, so 3 fails...
     results, marks = scaled_pair(3, scaled=False)
     out = reconcile(results, marks)
     assert not out.ok and "qty differs" in out.summary()
+    # ...but on V = $30,000 it is 300 x 0.0004 / 30,000 = 4e-6: up to 5 steps.
+    results, marks = scaled_pair(3, scaled=False, cash0=30_000.0)
+    assert reconcile(results, marks).ok
+    results, marks = scaled_pair(6, scaled=False, cash0=30_000.0)
+    assert not reconcile(results, marks).ok
