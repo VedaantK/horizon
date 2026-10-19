@@ -76,8 +76,9 @@ def _capped(desired, pos, cap_buy, cap_sell):
 @njit(cache=True)
 def plan_session(cash, pos, pending, exec_price, mark_prev, base_fee, weights, has_weights,
                  hold, liquidate, gap_exit, limit_px, exit_active, cap_buy, cap_sell, adv,
-                 sigma, impact_coef, max_impact):
-    """Plan session i from the state at its open.
+                 sigma, impact_coef, max_impact, min_trade=0.0):
+    """Plan session i from the state at its open. `min_trade` is a fraction of the
+    pre-trade value: a rebalance trade worth less is skipped (full exits always trade).
 
     Returns (delta, rate, order, m, scaled, limit_qty, limit_rate, exit_qty, exit_rate,
     new_pending):
@@ -120,6 +121,9 @@ def plan_session(cash, pos, pending, exec_price, mark_prev, base_fee, weights, h
             target = _round_qty(weights[j] * value / exec_price[j])
             # a full exit trades exactly what is held: no float residue
             desired = -pos[j] if target == 0.0 else _round_qty(target - pos[j])
+            if (min_trade > 0.0 and target != 0.0
+                    and abs(desired) * exec_price[j] < min_trade * value):
+                desired = 0.0  # too small to be worth a trade; the position stays as it is
         elif pending[j] != 0.0 and abs(pending[j] + pos[j]) <= HALF_TICK:
             desired = -pos[j]  # a carried trade within half a grid step of flat is a full exit
         else:

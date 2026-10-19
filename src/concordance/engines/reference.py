@@ -60,7 +60,8 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables, init_cash: floa
             sched.weights[i], bool(sched.has[i]), sched.hold[i], panel.liquidate[i],
             sched.gap_exit[i],
             sched.entry_limit[i], exit_active, tables.cap_buy[i], tables.cap_sell[i],
-            tables.adv[i], tables.sigma[i], tables.impact_coef, tables.max_impact)
+            tables.adv[i], tables.sigma[i], tables.impact_coef, tables.max_impact,
+            tables.min_trade)
         if was_scaled:
             scaled.append(i)
         for k in range(m):

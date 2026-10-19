@@ -98,6 +98,12 @@ Entry limits may only open a flat position with a positive weight in the same `O
    tradable**: it keeps its position. Without new weights (or in `hold`), `desired_j` is the
    carried quantity; a carried trade that would leave within half a grid step of flat is a
    full exit (`-pos_j`), for longs and shorts alike.
+   **Minimum trade:** with `min_trade = CostModel.min_trade_bps / 1e4 > 0`, a new-weight
+   trade with `target_j != 0` and `|desired_j| * exec_price_j < min_trade * V_pre` is
+   skipped (`desired_j = 0`; the position stays as it is). This covers small resizes and
+   tiny new positions. Full exits (`target_j = 0`), forced liquidations, gap exits and
+   carried quantities always trade. A trade within float noise of the threshold could be
+   decided differently by two engines; reconciliation would then reject the run.
 4. **Resting limit buy:** `limit_qty_j = round6(round6(w_j * V_pre / level_j) - pos_j)`,
    capped like a buy; nothing trades at the open for that asset.
 5. **Volume cap:** a rebalance trades at most `cap_buy` / `cap_sell` shares per session
@@ -169,6 +175,7 @@ Fills carry a `phase`: 0 at the open, 1 intraday. An asset has at most one fill 
 `base_fee[i, j] = commission_bps/1e4 + half_spread[i, j]`, where the half-spread is the quoted
 `(ask - bid) / (ask + bid)` from the **previous** session close, which is known before the open.
 If the quote is missing, `default_half_spread_bps` is used. Liquidation fills have zero fee.
+`min_trade_bps` (default 0 = off) sets the minimum trade of planning step 3.
 
 ## Liquidity (`costs.LiquidityModel`, optional)
 Known before the open of `i`, from sessions `< i` only (rolling `window`, at least

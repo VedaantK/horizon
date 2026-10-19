@@ -6,10 +6,12 @@
   concordance run STRATEGY.py --start --end   run all engines, reconcile, validate, report
   concordance backtest REQUEST.json           the same, driven by a JSON request (docs/RUN_API.md)
   concordance reproduce RUN_DIR               re-run a saved run and check it matches
+  concordance diagnose RUN_DIR                where and why engines stopped agreeing
   concordance validate STRATEGY.py            check a strategy file against the contract
   concordance formalize IDEA.txt -o SPEC.json  plain-language idea -> StrategySpec (AI)
   concordance author SPEC.json --out DIR      StrategySpec -> validated strategy.py (AI)
   concordance demo                            the pipeline on synthetic data (no WRDS)
+  concordance capabilities                    what can be tested, as JSON (for coordinators)
 """
 
 from __future__ import annotations
@@ -121,6 +123,14 @@ def cmd_reproduce(a):
     _done(0 if out["reproduced"] else 1)
 
 
+def cmd_diagnose(a):
+    from concordance.diagnose import diagnose, render
+
+    out = diagnose(a.run_dir, _engines(a.engines) if a.engines else None, top=a.top)
+    print(json.dumps(out, indent=2, default=str) if a.json else render(out))
+    _done(0 if out["ok"] else 1)
+
+
 def cmd_validate(a):
     from concordance.authoring.validate import validate_file
 
@@ -152,6 +162,12 @@ def cmd_author(a):
         short["answer"] = out["attempts"][-1].get("answer")
     print(json.dumps(short, indent=2, default=str))
     _done(0 if out["ok"] else 1)
+
+
+def cmd_capabilities(a):
+    from concordance.capabilities import capabilities
+
+    print(json.dumps(capabilities(a.lake), indent=2))
 
 
 def cmd_demo(a):
@@ -240,6 +256,14 @@ def main(argv=None):
     s.add_argument("-o", "--output")
     s.set_defaults(fn=cmd_reproduce)
 
+    s = sub.add_parser("diagnose", help="rerun a saved run's engines; show where they differ")
+    s.add_argument("run_dir")
+    s.add_argument("--engines", help="engines to compare with the reference "
+                   "(default: the run's own)")
+    s.add_argument("--top", type=int, default=10, help="rows per table")
+    s.add_argument("--json", action="store_true", help="print the full JSON report")
+    s.set_defaults(fn=cmd_diagnose)
+
     s = sub.add_parser("validate", help="check a strategy file against the contract")
     s.add_argument("strategy")
     s.add_argument("--params", help="JSON object passed to make_strategy(**params)")
@@ -262,6 +286,10 @@ def main(argv=None):
     s.add_argument("--rounds", type=int, default=3, help="max write/repair rounds")
     s.add_argument("--allow-open-questions", action="store_true")
     s.set_defaults(fn=cmd_author)
+
+    s = sub.add_parser("capabilities", help="what Concordance can test, as JSON")
+    s.add_argument("--lake")
+    s.set_defaults(fn=cmd_capabilities)
 
     s = sub.add_parser("demo", help="full pipeline on a synthetic market")
     common(s)

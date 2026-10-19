@@ -184,7 +184,7 @@ class _Executor(NautilusStrategy):
             t.base_fee[i], sc.weights[i], bool(sc.has[i]), sc.hold[i], c["liquidate"][i],
             sc.gap_exit[i],
             sc.entry_limit[i], exit_active, t.cap_buy[i], t.cap_sell[i], t.adv[i],
-            t.sigma[i], t.impact_coef, t.max_impact)
+            t.sigma[i], t.impact_coef, t.max_impact, t.min_trade)
         c["pending"] = pending
         if scaled:
             c["scaled"].append(i)

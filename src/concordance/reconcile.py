@@ -44,10 +44,20 @@ class PairCheck:
     max_equity_diff: float = 0.0
     max_cash_diff: float = 0.0
     n_fills: int = 0
+    bad_sessions: list[int] = field(default_factory=list)  # session index of each problem
 
     @property
     def ok(self) -> bool:
         return not self.problems
+
+    @property
+    def first_bad_session(self) -> int | None:
+        return min(self.bad_sessions) if self.bad_sessions else None
+
+    def flag(self, session, message: str) -> None:
+        self.problems.append(message)
+        if session is not None:
+            self.bad_sessions.append(int(session))
 
 
 @dataclass
@@ -83,7 +93,7 @@ def _compare(a: BacktestResult, b: BacktestResult,
     only = m[m["_merge"] != "both"]
     for _, r in only.head(10).iterrows():
         side = a.engine if r["_merge"] == "left_only" else b.engine
-        chk.problems.append(f"fill only in {side}: {sessions[int(r['session'])].date()} "
+        chk.flag(r["session"], f"fill only in {side}: {sessions[int(r['session'])].date()} "
                             f"phase={int(r['phase'])} asset={a.assets[int(r['asset'])]}")
     both = m[m["_merge"] == "both"]
     dq = (both["qty_a"] - both["qty_b"]).abs()
@@ -91,17 +101,17 @@ def _compare(a: BacktestResult, b: BacktestResult,
     allowed = _qty_allowance(a, b, both, dq, fee_gap, marks)
     flip = (dq > QTY_TOL) & (dq <= allowed + QTY_TOL)
     for _, r in both[dq > allowed + QTY_TOL].head(10).iterrows():
-        chk.problems.append(f"qty differs {sessions[int(r['session'])].date()} "
+        chk.flag(r["session"], f"qty differs {sessions[int(r['session'])].date()} "
                             f"asset={a.assets[int(r['asset'])]}: {r['qty_a']} vs {r['qty_b']}")
     dp = (both["price_a"] - both["price_b"]).abs() > PRICE_REL * both["price_a"].abs() + 1e-12
     for _, r in both[dp].head(10).iterrows():
-        chk.problems.append(f"price differs {sessions[int(r['session'])].date()} "
+        chk.flag(r["session"], f"price differs {sessions[int(r['session'])].date()} "
                             f"asset={a.assets[int(r['asset'])]}: {r['price_a']} vs {r['price_b']}")
     per_share = (both["fee_a"].abs() / both["qty_a"].abs().where(both["qty_a"] != 0)).fillna(0)
     flip_fee = np.where(flip, FEE_SLOPE * per_share * dq, 0.0)
     dfee = fee_gap > MONEY_TICK + REL_FLOAT * both["fee_a"].abs() + flip_fee
     for _, r in both[dfee].head(10).iterrows():
-        chk.problems.append(f"fee differs {sessions[int(r['session'])].date()} "
+        chk.flag(r["session"], f"fee differs {sessions[int(r['session'])].date()} "
                             f"asset={a.assets[int(r['asset'])]}: {r['fee_a']} vs {r['fee_b']}")
 
     cum_fills = np.zeros(len(sessions))
@@ -146,16 +156,17 @@ def _compare(a: BacktestResult, b: BacktestResult,
             chk.max_cash_diff = float(np.nanmax(d)) if len(d) else 0.0
         if bad.any():
             i = int(np.argmax(bad))
-            chk.problems.append(f"{label} diverges first at {sessions[i].date()}: "
+            chk.flag(i, f"{label} diverges first at {sessions[i].date()}: "
                                 f"{xa[i]!r} vs {xb[i]!r} (tol {tol[i]:.2e})")
 
     pos_bad = dpos > pos_allow + QTY_TOL
     if pos_bad.any():
         i, j = np.argwhere(pos_bad)[0]
-        chk.problems.append(f"position differs at {sessions[i].date()} asset={a.assets[j]}: "
+        chk.flag(i, f"position differs at {sessions[i].date()} asset={a.assets[j]}: "
                             f"{a.positions[i, j]} vs {b.positions[i, j]}")
     if a.scaled_sessions != b.scaled_sessions:
-        chk.problems.append("buy scaling happened on different sessions")
+        differ = set(a.scaled_sessions) ^ set(b.scaled_sessions)
+        chk.flag(min(differ) if differ else None, "buy scaling happened on different sessions")
     return chk
 
 

@@ -27,7 +27,7 @@ from concordance.strategy import Schedule
 @njit
 def _pre_segment(c, exec_price, base_fee, weights, has_weights, hold, liquidate, gap_exit,
                  stop, tp, entry_limit, exit_price, limit_filled, cap_buy, cap_sell, adv, sigma,
-                 impact_coef, max_impact, pending, scaled_out, log, log_n, charged):
+                 impact_coef, max_impact, min_trade, pending, scaled_out, log, log_n, charged):
     i = c.i
     n = c.to_col - c.from_col
     pos = c.last_position[c.from_col:c.to_col].copy()
@@ -38,7 +38,7 @@ def _pre_segment(c, exec_price, base_fee, weights, has_weights, hold, liquidate,
         c.last_cash[c.group] - charged[0], pos, pending, exec_price[i], mark_prev, base_fee[i],
         weights[i], has_weights[i], hold[i], liquidate[i], gap_exit[i], entry_limit[i],
         exit_active,
-        cap_buy[i], cap_sell[i], adv[i], sigma[i], impact_coef, max_impact)
+        cap_buy[i], cap_sell[i], adv[i], sigma[i], impact_coef, max_impact, min_trade)
     scaled_out[i] = scaled
     pending[:] = new_pending
 
@@ -130,7 +130,8 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
             f64(sched.take_profit), f64(sched.entry_limit), f64(sched.exit_price),
             b(sched.limit_filled),
             f64(tables.cap_buy), f64(tables.cap_sell), f64(tables.adv), f64(tables.sigma),
-            float(tables.impact_coef), float(tables.max_impact), np.zeros(N), scaled_out,
+            float(tables.impact_coef), float(tables.max_impact), float(tables.min_trade),
+            np.zeros(N), scaled_out,
             log, log_n, charged)
 
     pf = vbt.Portfolio.from_order_func(

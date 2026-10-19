@@ -30,6 +30,9 @@ class CostModel:
     # close as borrow_bps / 1e4 / 252. Flat: there is no per-stock borrow data in the lake,
     # and S&P 500 names are almost always general collateral (roughly 0.25-0.5% a year).
     borrow_bps: float = 50.0
+    # Rebalancing trades worth less than this share of portfolio value (bps) are skipped:
+    # the position stays as it is. Full exits and forced exits always trade. 0 = off.
+    min_trade_bps: float = 0.0
 
     def borrow_rate(self) -> float:
         """Borrow fee per session, as a rate on short market value."""
@@ -84,6 +87,7 @@ class ExecTables:
     impact_coef: float = 0.0
     max_impact: float = 0.0  # as a rate, not bps
     borrow_rate: float = 0.0  # per session, on short market value at the close
+    min_trade: float = 0.0  # fraction of pre-trade value below which a rebalance is skipped
 
     @property
     def has_liquidity(self) -> bool:
@@ -116,11 +120,12 @@ def exec_tables(panel: MarketPanel, costs: CostModel | None = None,
     if liquidity is None:
         nan = np.full((T, N), np.nan)
         return ExecTables(base, inf, inf.copy(), nan, nan.copy(),
-                          borrow_rate=costs.borrow_rate())
+                          borrow_rate=costs.borrow_rate(), min_trade=costs.min_trade_bps / 1e4)
     adv, sigma = trailing_liquidity(panel, liquidity.window, liquidity.min_obs)
     cap = liquidity.participation * adv
     known = np.isfinite(cap)
     cap_buy = np.where(known, cap, 0.0)  # no volume history: cannot size a buy, so none
     cap_sell = np.where(known, cap, np.inf)  # but an exit is never blocked
     return ExecTables(base, cap_buy, cap_sell, adv, sigma, liquidity.impact_coef,
-                      liquidity.max_impact_bps / 1e4, costs.borrow_rate())
+                      liquidity.max_impact_bps / 1e4, costs.borrow_rate(),
+                      costs.min_trade_bps / 1e4)

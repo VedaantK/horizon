@@ -28,7 +28,7 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
   "initial_capital": 1000000,
   "engines": ["reference", "vectorbt", "nautilus"],
   "costs": {"commission_bps": 1.0, "default_half_spread_bps": 5.0,
-            "use_prior_quoted_spread": true},
+            "use_prior_quoted_spread": true, "borrow_bps": 50.0, "min_trade_bps": 0.0},
   "liquidity": {"participation": 0.10, "impact_coef": 1.0, "max_impact_bps": 500,
                 "window": 20, "min_obs": 10},
   "validation": {"program": "my_idea", "placebo": 0, "lookahead_cuts": 3},
@@ -46,6 +46,15 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
   automatically. `data.end` past the lockbox date (`CONCORDANCE_LOCKBOX`) is refused unless
   `lockbox.unlock_reason` is given, and that read is logged.
 - `liquidity: null` turns off the volume cap and market impact.
+- `costs.borrow_bps` is the flat annual stock-borrow fee on short positions.
+  `costs.min_trade_bps` skips rebalancing trades worth less than that share of portfolio
+  value (full exits always trade); 0, the default, trades every change. See
+  docs/SEMANTICS.md, planning step 3.
+- `concordance capabilities` prints, as JSON, what can be tested: view fields, weight
+  limits, which orders are long-only, cost defaults, the lake's datasets and what is not
+  supported. Coordinators should build their instructions from it.
+- `concordance diagnose RUN_DIR` reruns a saved run's engines and shows where the first
+  engine stops agreeing with the reference, with each engine's state and fills there.
 - `validation.program` names the trial ledger. Every run is recorded in it, and the deflated
   Sharpe counts all trials in the program. Use one program per research question.
 - `engines`: a result counts only when engines agree; a single engine is allowed for

@@ -46,7 +46,7 @@ DEFAULTS: dict = {
     "initial_capital": 1_000_000.0,
     "engines": list(ENGINES),
     "costs": {"commission_bps": 1.0, "default_half_spread_bps": 5.0,
-              "use_prior_quoted_spread": True, "borrow_bps": 50.0},
+              "use_prior_quoted_spread": True, "borrow_bps": 50.0, "min_trade_bps": 0.0},
     "liquidity": {"participation": 0.10, "impact_coef": 1.0, "max_impact_bps": 500.0,
                   "window": 20, "min_obs": 10},
     "validation": {"program": "default", "placebo": 0, "lookahead_cuts": 3},
@@ -151,6 +151,12 @@ def resolve_request(request: dict) -> dict:
             raise RequestError("liquidity.participation must be in (0, 1]")
         if q["min_obs"] > q["window"] or q["window"] < 1:
             raise RequestError("liquidity: need 1 <= min_obs <= window")
+    for k in ("commission_bps", "default_half_spread_bps", "borrow_bps", "min_trade_bps"):
+        v = req["costs"][k]
+        if isinstance(v, bool) or not isinstance(v, int | float) or not v >= 0:
+            raise RequestError(f"costs.{k} must be a number >= 0")
+    if req["costs"]["min_trade_bps"] >= 1e4:
+        raise RequestError("costs.min_trade_bps must be below 10000 (100% of the portfolio)")
     if not isinstance(req["strategy"]["params"], dict):
         raise RequestError("strategy.params must be an object")
     req["run_id"] = req["run_id"] or (datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-"
@@ -317,6 +323,40 @@ def listing_gap_exits(panel: MarketPanel, res) -> pd.DataFrame:
 # ---------------------------------------------------------------------------------- run
 
 
+def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
+    """The request's CRSP panel (with warm-up and, if asked, customer links), the lake path
+    and the data section of the manifest."""
+    from concordance.data.crsp import load_sp500_panel
+    from concordance.data.ingest import default_lake
+
+    lake = Path(req["data"]["lake"] or default_lake())
+    log(f"loading panel {req['data']['start']} .. {req['data']['end']}")
+    panel = load_sp500_panel(req["data"]["start"], req["data"]["end"], lake=lake,
+                             warmup_sessions=strategy.warmup(),
+                             unlock_reason=req["lockbox"]["unlock_reason"])
+    lm = lake / "manifest.json"
+    data = {"lake": str(lake),
+            "lake_manifest_sha256": _sha256_file(lm) if lm.exists() else None}
+    if req["data"]["customer_links"]:
+        from concordance.data.customers import attach_customer_links
+
+        panel = attach_customer_links(panel, lake)
+        data["customer_links"] = {**panel.meta["customer_links"],
+                                  "sha256": _sha256_file(lake / "customer_links.parquet")}
+    return panel, lake, data
+
+
+def request_tables(req: dict, panel: MarketPanel):
+    """Fee rates, volume caps and the other execution tables a request asks for."""
+    c, q = req["costs"], req["liquidity"]
+    costs = CostModel(commission_bps=c["commission_bps"],
+                      default_half_spread_bps=c["default_half_spread_bps"],
+                      use_prior_quoted_spread=c["use_prior_quoted_spread"],
+                      borrow_bps=c["borrow_bps"], min_trade_bps=c["min_trade_bps"])
+    liquidity = LiquidityModel(**q) if q is not None else None
+    return exec_tables(panel, costs, liquidity)
+
+
 def run_backtest(request: dict, output_dir: str | Path | None = None,
                  panel: MarketPanel | None = None, quiet: bool = True) -> dict:
     """Run one request. Writes artifacts and result.json to `output_dir` (default
@@ -364,25 +404,7 @@ def run_backtest(request: dict, output_dir: str | Path | None = None,
         manifest["strategy"].update(name=getattr(strategy, "name", type(strategy).__name__),
                                     cls=type(strategy).__name__)
         if panel is None:
-            from concordance.data.crsp import load_sp500_panel
-            from concordance.data.ingest import default_lake
-
-            lake = Path(req["data"]["lake"] or default_lake())
-            log(f"loading panel {req['data']['start']} .. {req['data']['end']}")
-            panel = load_sp500_panel(req["data"]["start"], req["data"]["end"], lake=lake,
-                                     warmup_sessions=strategy.warmup(),
-                                     unlock_reason=req["lockbox"]["unlock_reason"])
-            lm = lake / "manifest.json"
-            manifest["data"] = {"lake": str(lake),
-                                "lake_manifest_sha256": _sha256_file(lm) if lm.exists()
-                                else None}
-            if req["data"]["customer_links"]:
-                from concordance.data.customers import attach_customer_links
-
-                panel = attach_customer_links(panel, lake)
-                manifest["data"]["customer_links"] = {
-                    **panel.meta["customer_links"],
-                    "sha256": _sha256_file(lake / "customer_links.parquet")}
+            panel, lake, manifest["data"] = load_panel(req, strategy, log)
         else:  # caller-supplied panel: keep its trial ledger out of the real lake
             lake = Path(req["data"]["lake"]) if req["data"]["lake"] else out
             manifest["data"] = {"lake": None, "note": "panel supplied by caller"}
@@ -442,13 +464,7 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
         raise
     except Exception as e:
         raise StrategyError(f"strategy failed while deciding: {type(e).__name__}: {e}") from e
-    c, q = req["costs"], req["liquidity"]
-    costs = CostModel(commission_bps=c["commission_bps"],
-                      default_half_spread_bps=c["default_half_spread_bps"],
-                      use_prior_quoted_spread=c["use_prior_quoted_spread"],
-                      borrow_bps=c["borrow_bps"])
-    liquidity = LiquidityModel(**q) if q is not None else None
-    tables = exec_tables(panel, costs, liquidity)
+    tables = request_tables(req, panel)
     results = {}
     for e in req["engines"]:
         log(f"engine: {e}")
