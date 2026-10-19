@@ -50,6 +50,30 @@ def _fees(rate, limit_rate, delta, limit_qty, liquidate, base_fee, adv, sigma, i
 
 
 @njit(cache=True)
+def _capped(desired, pos, cap_buy, cap_sell):
+    """The part of `desired` the volume cap allows this session.
+
+    Shares that reduce the position (an exit or a cover) use `cap_sell`, which is unlimited
+    when volume history is unknown; shares that open or add to a position (long or short)
+    use `cap_buy`, which is 0 then. With a known cap both are equal, so the total traded is
+    capped once. For long-only trading this is exactly the earlier buy/sell rule.
+    """
+    if desired == 0.0:
+        return 0.0
+    size = abs(desired)
+    reducing = (desired > 0.0) != (pos > 0.0) and pos != 0.0
+    reduce = min(size, abs(pos)) if reducing else 0.0
+    enter = size - reduce if reducing else size
+    cs = _floor_qty(cap_sell)
+    cb = _floor_qty(cap_buy)
+    out = reduce if reduce <= cs else cs
+    room = cb - out
+    if enter > 0.0 and room > 0.0:
+        out = _round_qty(out + (enter if enter <= room else _floor_qty(room)))
+    return out if desired > 0.0 else -out
+
+
+@njit(cache=True)
 def plan_session(cash, pos, pending, exec_price, mark_prev, base_fee, weights, has_weights,
                  hold, liquidate, gap_exit, limit_px, exit_active, cap_buy, cap_sell, adv,
                  sigma, impact_coef, max_impact):
@@ -94,20 +118,14 @@ def plan_session(cash, pos, pending, exec_price, mark_prev, base_fee, weights, h
             continue
         if fresh:
             target = _round_qty(weights[j] * value / exec_price[j])
-            # a full exit sells exactly what is held: no float residue
+            # a full exit trades exactly what is held: no float residue
             desired = -pos[j] if target == 0.0 else _round_qty(target - pos[j])
+        elif pending[j] != 0.0 and abs(pending[j] + pos[j]) <= HALF_TICK:
+            desired = -pos[j]  # a carried trade within half a grid step of flat is a full exit
         else:
-            # a carried sell within half a grid step of the position is a full exit
-            desired = -pos[j] if pending[j] <= -pos[j] + HALF_TICK else pending[j]
-        done = 0.0
-        if desired > 0.0:
-            cap = _floor_qty(cap_buy[j])
-            done = desired if desired <= cap else cap
-        elif desired < 0.0:
-            cap = _floor_qty(cap_sell[j])
-            done = desired if -desired <= cap else -cap
-        delta[j] = done
-        new_pending[j] = _round_qty(desired - done)
+            desired = pending[j]
+        delta[j] = _capped(desired, pos[j], cap_buy[j], cap_sell[j])
+        new_pending[j] = _round_qty(desired - delta[j])
 
     rate = np.zeros(n)
     limit_rate = np.zeros(n)
@@ -128,7 +146,7 @@ def plan_session(cash, pos, pending, exec_price, mark_prev, base_fee, weights, h
             notional = limit_qty[j] * limit_px[j]
             buy_cost += notional + notional * limit_rate[j]
     scaled = False
-    if buy_cost > cash_after:
+    if buy_cost > cash_after and buy_cost > 0.0:  # cash can dip below 0 from borrow fees
         scaled = True
         k = max(cash_after, 0.0) / buy_cost * (1.0 - SAFETY)
         for j in range(n):

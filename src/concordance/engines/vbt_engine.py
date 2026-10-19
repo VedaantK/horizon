@@ -20,14 +20,14 @@ from vectorbt.portfolio.nb import order_nb
 from concordance.costs import ExecTables
 from concordance.panel import MarketPanel
 from concordance.planner import plan_session
-from concordance.result import FILL_COLUMNS, BacktestResult
+from concordance.result import FILL_COLUMNS, AccountWipedOut, BacktestResult
 from concordance.strategy import Schedule
 
 
 @njit
 def _pre_segment(c, exec_price, base_fee, weights, has_weights, hold, liquidate, gap_exit,
                  stop, tp, entry_limit, exit_price, limit_filled, cap_buy, cap_sell, adv, sigma,
-                 impact_coef, max_impact, pending, scaled_out, log, log_n):
+                 impact_coef, max_impact, pending, scaled_out, log, log_n, charged):
     i = c.i
     n = c.to_col - c.from_col
     pos = c.last_position[c.from_col:c.to_col].copy()
@@ -35,7 +35,7 @@ def _pre_segment(c, exec_price, base_fee, weights, has_weights, hold, liquidate,
     exit_active = np.isfinite(stop[i]) | np.isfinite(tp[i])
     (delta, rate, order, m, scaled, limit_qty, limit_rate, exit_qty, exit_rate,
      new_pending) = plan_session(
-        c.last_cash[c.group], pos, pending, exec_price[i], mark_prev, base_fee[i],
+        c.last_cash[c.group] - charged[0], pos, pending, exec_price[i], mark_prev, base_fee[i],
         weights[i], has_weights[i], hold[i], liquidate[i], gap_exit[i], entry_limit[i],
         exit_active,
         cap_buy[i], cap_sell[i], adv[i], sigma[i], impact_coef, max_impact)
@@ -74,6 +74,25 @@ def _pre_segment(c, exec_price, base_fee, weights, has_weights, hold, liquidate,
 
 
 @njit
+def _post_segment(c, borrow_rate, borrow_out, charged):
+    """At the close: stock borrow on vectorbt's short positions, valued at vectorbt's own
+    (forward-filled) close. vectorbt has no cash-flow input for this (and refuses any order
+    once its cash is <= 0), so the fee is kept outside it: `charged` is the running total
+    the planner subtracts from vectorbt's cash, and the cash and value series vectorbt
+    rebuilds from its order records are reduced by the cumulative fee afterwards."""
+    if borrow_rate == 0.0:
+        return
+    short_value = 0.0
+    for col in range(c.from_col, c.to_col):
+        if c.last_position[col] < 0.0:
+            short_value -= c.last_position[col] * c.last_val_price[col]
+    if short_value > 0.0:
+        fee = borrow_rate * short_value
+        borrow_out[c.i] = fee
+        charged[0] += fee
+
+
+@njit
 def _flex_order(c, cols, size, price, fee, k):
     if c.call_idx >= k:
         return -1, NoOrder
@@ -81,7 +100,7 @@ def _flex_order(c, cols, size, price, fee, k):
         size=size[c.call_idx],
         price=price[c.call_idx],
         size_type=SizeType.Amount,
-        direction=Direction.LongOnly,
+        direction=Direction.Both,
         fees=fee[c.call_idx],
         allow_partial=False,
         raise_reject=True,
@@ -100,6 +119,8 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
         return np.ascontiguousarray(a, dtype=np.bool_)
 
     scaled_out = np.zeros(T, dtype=np.bool_)
+    borrow_out = np.zeros(T)
+    charged = np.zeros(1)
     # At most one open order per (session, asset), plus the intraday fills the schedule has.
     max_orders = T * N + int(np.isfinite(sched.exit_price).sum() + sched.limit_filled.sum())
     log = np.full(max_orders, -1, dtype=np.int64)
@@ -110,7 +131,7 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
             b(sched.limit_filled),
             f64(tables.cap_buy), f64(tables.cap_sell), f64(tables.adv), f64(tables.sigma),
             float(tables.impact_coef), float(tables.max_impact), np.zeros(N), scaled_out,
-            log, log_n)
+            log, log_n, charged)
 
     pf = vbt.Portfolio.from_order_func(
         close,
@@ -118,6 +139,9 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
         flexible=True,
         pre_segment_func_nb=_pre_segment,
         pre_segment_args=args,
+        post_segment_func_nb=_post_segment,
+        post_segment_args=(float(tables.borrow_rate), borrow_out, charged),
+        call_post_segment=True,
         segment_mask=True,
         call_pre_segment=True,
         cash_sharing=True,
@@ -129,9 +153,14 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
         freq="1D",
     )
 
-    equity = pf.value().to_numpy(dtype=float)
-    cash = pf.cash().to_numpy(dtype=float)
+    charged = np.cumsum(borrow_out)
+    equity = pf.value().to_numpy(dtype=float) - charged
+    cash = pf.cash().to_numpy(dtype=float) - charged
     positions = pf.assets().to_numpy(dtype=float)
+    wiped = (positions < 0).any(axis=1) & ~(equity > 0)
+    if wiped.any():
+        i = int(np.argmax(wiped))
+        raise AccountWipedOut(f"vectorbt: equity {equity[i]:.2f} <= 0 at session {i}")
     rec = pf.orders.values
     if len(rec) != log_n[0]:
         raise RuntimeError(f"vectorbt recorded {len(rec)} orders, {log_n[0]} were sent")
@@ -148,4 +177,4 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
         "fee": rec["fees"],
     })[FILL_COLUMNS]
     return BacktestResult("vectorbt", panel.sessions, panel.assets, equity, cash, positions,
-                          fills, [int(i) for i in np.flatnonzero(scaled_out)])
+                          fills, [int(i) for i in np.flatnonzero(scaled_out)], borrow_out)

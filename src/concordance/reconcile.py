@@ -97,6 +97,8 @@ def _compare(a: BacktestResult, b: BacktestResult,
     if len(fa):
         counts = np.bincount(fa["session"].to_numpy(), minlength=len(sessions))
         cum_fills = np.cumsum(counts)
+    if a.borrow is not None:  # each borrow charge is one more rounded money amount
+        cum_fills = cum_fills + np.cumsum(a.borrow > 0)
     tol = MONEY_TICK * (cum_fills + 1) + REL_FLOAT * np.abs(a.equity)
 
     # Grid flips: cash they explain, and how far each asset's position may drift.
@@ -113,6 +115,14 @@ def _compare(a: BacktestResult, b: BacktestResult,
     open_value = np.zeros(len(sessions))
     if marks is not None:
         open_value = np.nansum(np.where(dpos > QTY_TOL, dpos * np.abs(marks), 0.0), axis=1)
+        if a.borrow is not None and a.borrow.any():
+            # a one-step gap in a short position also changes that night's borrow fee
+            short_value = np.nansum(np.where(a.positions < 0, -a.positions * marks, 0.0),
+                                    axis=1)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                rate = float(np.nanmax(np.where(short_value > 0, a.borrow / short_value,
+                                                np.nan)))
+            flip_cash = flip_cash + rate * np.cumsum(open_value)
     tolerances = {"cash": tol + flip_cash, "equity": tol + flip_cash + open_value}
 
     for label, xa, xb in (("equity", a.equity, b.equity), ("cash", a.cash, b.cash)):

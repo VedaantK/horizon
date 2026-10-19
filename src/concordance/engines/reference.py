@@ -14,7 +14,7 @@ import pandas as pd
 from concordance.costs import ExecTables
 from concordance.panel import MarketPanel
 from concordance.planner import plan_session
-from concordance.result import FILL_COLUMNS, BacktestResult
+from concordance.result import FILL_COLUMNS, AccountWipedOut, BacktestResult
 from concordance.strategy import Schedule
 
 _plan = plan_session.py_func  # pure Python: independent of the numba compilation
@@ -36,14 +36,18 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables, init_cash: floa
     pos_hist = np.empty((T, N))
     fills: list[tuple] = []
     scaled: list[int] = []
+    borrow_hist = np.zeros(T)
 
     def trade(i, phase, j, qty, price, rate):
         nonlocal cash
         notional = abs(qty) * price
         fee = notional * rate
         cash += -(notional + fee) if qty > 0 else notional - fee
-        if cash < 0:
-            raise AssertionError(f"cash went negative at session {i}: {cash}")
+        # Only a buy may never overdraw. Borrow fees can leave a fully invested long/short
+        # book a little below zero; the planner then scales buys to nothing until sells
+        # restore cash.
+        if qty > 0 and cash < 0:
+            raise AssertionError(f"a buy overdrew cash at session {i}: {cash}")
         pos[j] += qty
         fills.append((i, phase, j, qty, price, fee))
 
@@ -78,11 +82,18 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables, init_cash: floa
         held = pos != 0
         if np.isnan(last_val[held]).any():
             raise AssertionError(f"holding an asset with no valuation price at session {i}")
+        short = pos < 0
+        if short.any() and tables.borrow_rate > 0:
+            borrow_hist[i] = tables.borrow_rate * float(np.dot(-pos[short], last_val[short]))
+            cash -= borrow_hist[i]
         equity[i] = cash + float(np.dot(pos[held], last_val[held]))
+        if short.any() and not equity[i] > 0:
+            raise AccountWipedOut(f"equity {equity[i]:.2f} <= 0 at session {i} with "
+                                  "short positions open")
         cash_hist[i] = cash
         pos_hist[i] = pos
 
     fills_df = pd.DataFrame(fills, columns=FILL_COLUMNS).astype(
         {"session": np.int64, "phase": np.int64, "asset": np.int64})
     return BacktestResult("reference", panel.sessions, panel.assets, equity, cash_hist,
-                          pos_hist, fills_df, scaled)
+                          pos_hist, fills_df, scaled, borrow_hist)

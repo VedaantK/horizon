@@ -69,7 +69,7 @@ class MyStrategy(Strategy):
         tr = view["tr_close"]          # total-return prices up to today only
         ...
         return Orders(weights=w, stop_loss_pct=..., take_profit_pct=..., entry_limit=...)
-        # or plain weights, or None = hold. Long-only, sum <= 1
+        # or plain weights, or None = hold. Negative = short; net <= 1, gross <= 2
 
 def make_strategy(**params):
     return MyStrategy(**params)

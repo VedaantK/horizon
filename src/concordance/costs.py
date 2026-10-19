@@ -1,9 +1,10 @@
 """Transaction costs and liquidity limits.
 
 `CostModel` gives a per-(session, asset) fee rate on traded notional (commission + half
-spread). `LiquidityModel` adds a volume cap and a square-root market-impact charge, both
-measured against average daily volume from sessions *before* the trade. `exec_tables`
-combines them into the arrays every engine reads. See docs/SEMANTICS.md.
+spread) and the stock-borrow fee on short positions. `LiquidityModel` adds a volume cap
+and a square-root market-impact charge, both measured against average daily volume from
+sessions *before* the trade. `exec_tables` combines them into the arrays every engine reads.
+See docs/SEMANTICS.md.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import pandas as pd
 
 from concordance.panel import MarketPanel, PanelError
 
+SESSIONS_PER_YEAR = 252
+
 
 @dataclass(frozen=True)
 class CostModel:
@@ -23,6 +26,14 @@ class CostModel:
     use_prior_quoted_spread: bool = True
     default_half_spread_bps: float = 5.0
     max_half_spread_bps: float = 500.0
+    # Annual stock-borrow fee on the value of short positions, charged each session at the
+    # close as borrow_bps / 1e4 / 252. Flat: there is no per-stock borrow data in the lake,
+    # and S&P 500 names are almost always general collateral (roughly 0.25-0.5% a year).
+    borrow_bps: float = 50.0
+
+    def borrow_rate(self) -> float:
+        """Borrow fee per session, as a rate on short market value."""
+        return self.borrow_bps / 1e4 / SESSIONS_PER_YEAR
 
     def fee_rates(self, panel: MarketPanel) -> np.ndarray:
         T, N = panel.shape
@@ -41,7 +52,7 @@ class CostModel:
 
 
 ZERO_COST = CostModel(commission_bps=0.0, use_prior_quoted_spread=False,
-                      default_half_spread_bps=0.0)
+                      default_half_spread_bps=0.0, borrow_bps=0.0)
 
 
 @dataclass(frozen=True)
@@ -72,6 +83,7 @@ class ExecTables:
     sigma: np.ndarray  # (T, N) daily return volatility, NaN if unknown
     impact_coef: float = 0.0
     max_impact: float = 0.0  # as a rate, not bps
+    borrow_rate: float = 0.0  # per session, on short market value at the close
 
     @property
     def has_liquidity(self) -> bool:
@@ -103,11 +115,12 @@ def exec_tables(panel: MarketPanel, costs: CostModel | None = None,
     inf = np.full((T, N), np.inf)
     if liquidity is None:
         nan = np.full((T, N), np.nan)
-        return ExecTables(base, inf, inf.copy(), nan, nan.copy())
+        return ExecTables(base, inf, inf.copy(), nan, nan.copy(),
+                          borrow_rate=costs.borrow_rate())
     adv, sigma = trailing_liquidity(panel, liquidity.window, liquidity.min_obs)
     cap = liquidity.participation * adv
     known = np.isfinite(cap)
     cap_buy = np.where(known, cap, 0.0)  # no volume history: cannot size a buy, so none
     cap_sell = np.where(known, cap, np.inf)  # but an exit is never blocked
     return ExecTables(base, cap_buy, cap_sell, adv, sigma, liquidity.impact_coef,
-                      liquidity.max_impact_bps / 1e4)
+                      liquidity.max_impact_bps / 1e4, costs.borrow_rate())

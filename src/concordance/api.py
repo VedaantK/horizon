@@ -45,7 +45,7 @@ DEFAULTS: dict = {
     "initial_capital": 1_000_000.0,
     "engines": list(ENGINES),
     "costs": {"commission_bps": 1.0, "default_half_spread_bps": 5.0,
-              "use_prior_quoted_spread": True},
+              "use_prior_quoted_spread": True, "borrow_bps": 50.0},
     "liquidity": {"participation": 0.10, "impact_coef": 1.0, "max_impact_bps": 500.0,
                   "window": 20, "min_obs": 10},
     "validation": {"program": "default", "placebo": 0, "lookahead_cuts": 3},
@@ -442,7 +442,8 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
     c, q = req["costs"], req["liquidity"]
     costs = CostModel(commission_bps=c["commission_bps"],
                       default_half_spread_bps=c["default_half_spread_bps"],
-                      use_prior_quoted_spread=c["use_prior_quoted_spread"])
+                      use_prior_quoted_spread=c["use_prior_quoted_spread"],
+                      borrow_bps=c["borrow_bps"])
     liquidity = LiquidityModel(**q) if q is not None else None
     tables = exec_tables(panel, costs, liquidity)
     results = {}

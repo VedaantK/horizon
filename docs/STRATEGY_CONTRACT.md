@@ -106,7 +106,10 @@ calendar is published in advance).
 - **`None`**: change nothing. Positions and exit orders stay.
 - **Weights**: a numpy array of length N, a `dict {asset_id: weight}`, or a pandas Series.
   Target fraction of current equity per asset. Missing or NaN = 0, which **sells** that
-  asset. Weights must be >= 0 (long-only) and sum to <= 1 (no leverage). Leftover is cash.
+  asset. A negative weight is a short. Net (sum of weights) must be <= 1 and gross (sum of
+  |weights|) <= 2: e.g. 100% long, 100/100 market-neutral, 130/30 or 100% short. Leftover
+  is cash. Shorts pay a flat stock-borrow fee (default 0.5% a year) and the dividends of
+  the stocks they are short. Stop-loss, take-profit and entry limits are for longs only.
   Returning weights rebalances **every** asset to its target at the next open: include the
   positions you want to keep, or list them in `hold` to leave them exactly as they are.
 - **`Orders(...)`**: weights plus exit and entry orders:

@@ -22,6 +22,7 @@ class BacktestResult:
     positions: np.ndarray  # (T, N) quantities at each session close
     fills: pd.DataFrame  # FILL_COLUMNS; session/asset are integer indices; qty signed
     scaled_sessions: list[int] = field(default_factory=list)
+    borrow: np.ndarray | None = None  # (T,) stock-borrow fee charged at each close
     meta: dict = field(default_factory=dict)
 
     @property
@@ -42,6 +43,10 @@ class BacktestResult:
     def open_positions(self) -> pd.Series:
         last = pd.Series(self.positions[-1], index=self.assets)
         return last[last != 0]
+
+
+class AccountWipedOut(RuntimeError):
+    """Equity reached zero with short positions open: the backtest cannot continue."""
 
 
 def empty_fills() -> pd.DataFrame:

@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from random_market import RandomOrders, RandomRebalancer, random_long_frame
+from random_market import RandomLongShort, RandomOrders, RandomRebalancer, random_long_frame
 
 from concordance.costs import ZERO_COST, CostModel, LiquidityModel
 from concordance.panel import build_panel
@@ -41,6 +41,26 @@ def test_engines_agree_with_orders_and_liquidity(seed):
     for i, j in zip(exits["session"], exits["asset"], strict=True):
         if np.isfinite(s.exit_price[i, j]):
             assert ref.positions[i, j] == 0.0
+
+
+SHORT_COSTS = [CostModel(borrow_bps=300.0), ZERO_COST,
+               CostModel(commission_bps=25.0, default_half_spread_bps=40, borrow_bps=50.0)]
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_engines_agree_long_short(seed):
+    """Shorts, flips through zero and long/short books, with stock borrow; on odd seeds the
+    volume cap with carry-over and market impact."""
+    panel = build_panel(random_long_frame(seed))
+    liq = LiquidityModel(participation=0.05, window=5, min_obs=3) if seed % 2 else None
+    out = run(panel, RandomLongShort(seed), costs=SHORT_COSTS[seed % 3], init_cash=1e6,
+              strict=False, liquidity=liq)
+    assert out.report.ok, out.report.summary()
+    ref = out.results["reference"]
+    assert np.isfinite(ref.equity).all() and (ref.equity > 0).all()
+    assert (ref.positions < 0).any()
+    if seed % 3 != 1:
+        assert ref.borrow.sum() > 0
 
 
 def test_order_markets_exercise_the_new_cases():

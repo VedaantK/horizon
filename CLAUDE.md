@@ -34,8 +34,9 @@ Multi-engine backtester. Read `README.md` and `docs/SEMANTICS.md` first.
 and is not used.
 
 ## v1 limits (not yet implemented)
-Long-only, no leverage, fractional shares (1e-6 grid), daily bars. Orders: market at the
-open, stop/take-profit exits and next-session limit entries on the documented intraday path
-(no stop entries, no limit exits other than take-profit, no trailing stops built in).
+Shorting with net <= 1 and gross <= 2, a flat borrow fee and no maintenance margin.
+Fractional shares (1e-6 grid), daily bars. Orders: market at the open, stop/take-profit
+exits and next-session limit entries on the documented intraday path, for longs only (no
+stop entries, no limit exits other than take-profit, no trailing stops built in).
 Costs: commission + prior-close half spread + square-root impact; volume cap on rebalances.
 Fundamentals are restated values, not as-first-reported.

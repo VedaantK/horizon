@@ -152,12 +152,22 @@ def _row(values, panel: MarketPanel, what: str) -> np.ndarray:
     return row
 
 
+MAX_NET = 1.0  # sum of weights: longs never use borrowed cash (no margin loan, no interest)
+MAX_GROSS = 2.0  # sum of |weights|: Reg T's 50% initial margin, e.g. 100/100 or 130/30
+
+
 def _to_row(decision, panel: MarketPanel) -> np.ndarray:
+    """Weights are fractions of equity; negative = short. Net <= 1 keeps cash >= 0 at the
+    rebalance (short proceeds fund any longs above equity), gross <= 2 bounds leverage."""
     row = np.nan_to_num(_row(decision, panel, "weights"))
-    if (row < 0).any():
-        raise ValueError("negative weights are not supported yet (long-only v1)")
-    if row.sum() > 1.0 + 1e-12:
-        raise ValueError(f"gross weight {row.sum():.6f} exceeds 1 (no leverage in v1)")
+    if not np.isfinite(row).all():
+        raise ValueError("weights must be finite")
+    if row.sum() > MAX_NET + 1e-12:
+        raise ValueError(f"net weight {row.sum():.6f} exceeds {MAX_NET:g}: longs may only "
+                         "be funded by equity and short proceeds, not borrowed cash")
+    gross = np.abs(row).sum()
+    if gross > MAX_GROSS + 1e-12:
+        raise ValueError(f"gross weight {gross:.6f} exceeds {MAX_GROSS:g} (sum of |weights|)")
     return row
 
 
@@ -285,6 +295,7 @@ def build_schedule(strategy: Strategy, panel: MarketPanel) -> Schedule:
     stop_pct = np.full(N, np.nan)
     tp_pct = np.full(N, np.nan)
     limit_next = np.full(N, np.nan)
+    target = np.zeros(N)  # latest target weights, to keep exit orders off short positions
 
     def resolve_pct(mask):
         sp = mask & np.isfinite(stop_pct)
@@ -367,13 +378,21 @@ def build_schedule(strategy: Strategy, panel: MarketPanel) -> Schedule:
             s.has[i + 1] = True
             if decision.hold is not None:
                 h = _hold_row(decision.hold, panel)
-                if (s.weights[i + 1][h] > 0).any():
+                if (s.weights[i + 1][h] != 0).any():
                     raise ValueError("a held-as-is asset (hold) must have weight 0 / NaN")
                 s.hold[i + 1] = h
         elif decision.hold is not None:
             raise ValueError("hold only applies to a rebalance: give weights too")
         _apply_levels(decision, panel, i, r, held, entry_tr, stop, tp, stop_pct, tp_pct,
                       notes)
+        if s.has[i + 1]:
+            target = s.weights[i + 1]
+        levels = (np.isfinite(stop) | np.isfinite(tp) | np.isfinite(stop_pct)
+                  | np.isfinite(tp_pct))
+        if (levels & (target < 0)).any():
+            a = panel.assets[np.flatnonzero(levels & (target < 0))[0]]
+            raise ValueError(f"stop-loss / take-profit orders are for long positions only; "
+                             f"asset {a} has a short target")
         if decision.entry_limit is not None:
             lv = _level_row(decision.entry_limit, panel, "entry_limit")
             fin = np.isfinite(lv)

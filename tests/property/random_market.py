@@ -66,3 +66,28 @@ class RandomRebalancer(Strategy):
         w = np.zeros(n)
         w[chosen] = self.rng.dirichlet(np.ones(k)) * float(self.rng.uniform(0.3, 1.0))
         return w
+
+
+class RandomLongShort(Strategy):
+    """Random long/short targets anywhere inside the limits (net <= 1, gross <= 2): flips
+    through zero, pure shorts, market-neutral books and fully invested 130/30-style books."""
+
+    def __init__(self, seed: int, p: float = 0.35):
+        self.rng = np.random.default_rng(seed + 30_000)
+        self.p = p
+
+    def decide(self, view):
+        rng = self.rng
+        if rng.random() > self.p:
+            return None
+        n = len(view.assets)
+        k = int(rng.integers(1, n + 1))
+        chosen = rng.choice(n, size=k, replace=False)
+        w = np.zeros(n)
+        w[chosen] = rng.normal(size=k)
+        gross = float(rng.uniform(0.2, 2.0))
+        w *= gross / max(np.abs(w).sum(), 1e-12)
+        if w.sum() > 1.0:  # shift longs down until net = 1; gross only falls
+            longs = w > 0
+            w[longs] *= (1.0 - w[~longs].sum()) / w[longs].sum()
+        return w

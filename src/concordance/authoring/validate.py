@@ -113,8 +113,9 @@ def _frames_in(path: str, exc: BaseException) -> dict:
 
 
 HINTS = {
-    "negative weights": "long-only: weights must be >= 0 (shorting is not supported yet)",
-    "exceeds 1": "weights must sum to <= 1 (no leverage); scale them down",
+    "net weight": "weights (longs minus shorts) must sum to <= 1; scale the longs down",
+    "gross weight": "sum of |weights| must be <= 2 (e.g. 100/100 or 130/30); scale down",
+    "long positions only": "stop-loss / take-profit orders are for long positions only",
     "shape": "arrays must have one entry per asset: len(view.assets)",
     "unknown assets": "dict keys must be asset ids from view.assets",
     "entry_limit": "entry_limit opens a flat position only, with a positive weight in the "

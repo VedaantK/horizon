@@ -13,9 +13,10 @@ price (bar execution, L1). Resting exits are real Nautilus STOP_MARKET and LIMIT
 (one cancels the other), and limit entries real LIMIT buys, so Nautilus's matching engine
 decides independently whether and where they fill; unfilled ones are cancelled at the
 close. Fees, including market impact, are computed by the fee model below, separately from
-the shared planner. Equity at each close is read from Nautilus: account balance plus
-`portfolio.net_exposures` marked at the last bar price. Money uses a 9-decimal currency and
-quantities a 6-decimal grid, matching docs/SEMANTICS.md.
+the shared planner. Equity at each close is read from Nautilus: account balance plus signed
+net positions marked at the last bar price Nautilus delivered. Stock borrow on shorts is
+charged at the close through the simulated exchange's account ledger. Money uses a
+9-decimal currency and quantities a 6-decimal grid, matching docs/SEMANTICS.md.
 """
 
 from __future__ import annotations
@@ -26,8 +27,10 @@ from decimal import Decimal
 
 import numpy as np
 import pandas as pd
+from nautilus_trader.accounting.factory import AccountFactory
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FeeModel
+from nautilus_trader.backtest.modules import SimulationModule, SimulationModuleConfig
 from nautilus_trader.config import LoggingConfig, RiskEngineConfig
 from nautilus_trader.model.data import Bar, BarSpecification, BarType
 from nautilus_trader.model.enums import (
@@ -49,7 +52,7 @@ from nautilus_trader.trading.strategy import Strategy as NautilusStrategy
 from concordance.costs import ExecTables
 from concordance.panel import PRICE_DECIMALS, QTY_DECIMALS, MarketPanel
 from concordance.planner import plan_session
-from concordance.result import FILL_COLUMNS, BacktestResult
+from concordance.result import FILL_COLUMNS, AccountWipedOut, BacktestResult
 from concordance.strategy import Schedule
 
 VENUE = Venue("SIM")
@@ -99,6 +102,31 @@ class _TableFee(FeeModel):
         rate = float(t.base_fee[i, j]) + _impact(q, float(t.adv[i, j]), float(t.sigma[i, j]),
                                                  float(t.impact_coef), float(t.max_impact))
         return Money(notional * rate, self.ccy)
+
+
+class _VenueHandle(SimulationModule):
+    """Gives the strategy the simulated exchange, so stock borrow is charged through
+    Nautilus's own account ledger (`adjust_account`), as its FX rollover module does."""
+
+    def __init__(self):
+        super().__init__(SimulationModuleConfig())
+        self.venue_exchange = None
+
+    def register_venue(self, exchange):
+        super().register_venue(exchange)
+        self.venue_exchange = exchange
+
+    def pre_process(self, data):
+        pass
+
+    def process(self, ts_now: int):
+        pass
+
+    def log_diagnostics(self, logger):
+        pass
+
+    def reset(self):
+        pass
 
 
 class _Executor(NautilusStrategy):
@@ -212,13 +240,23 @@ class _Executor(NautilusStrategy):
 
     def _record(self, i: int):
         c = self.ctx
+        pos = self._positions()
+        held = pos != 0.0
+        short = pos < 0.0
+        rate = float(c["tables"].borrow_rate)
+        if rate > 0.0 and short.any():
+            fee = rate * float(np.dot(-pos[short], self.last_close[short]))
+            c["borrow"][i] = fee
+            c["venue"].venue_exchange.adjust_account(Money(-fee, c["ccy"]))
         cash = self._cash()
-        exposures = self.portfolio.net_exposures(VENUE) or {}
-        exposure = exposures.get(c["ccy"])
+        # Signed: portfolio.net_exposures reports a short's notional as positive.
         c["cash"][i] = cash
-        c["equity"][i] = cash + (exposure.as_double() if exposure is not None else 0.0)
-        c["positions"][i] = self._positions()
+        c["equity"][i] = cash + float(np.dot(pos[held], self.last_close[held]))
+        c["positions"][i] = pos
         c["recorded"][i] = True
+        if short.any() and not c["equity"][i] > 0:
+            self.problems.append(f"equity {c['equity'][i]:.2f} <= 0 at session {i}")
+            c["wiped_out"] = True
 
     def on_order_filled(self, event):
         c = self.ctx
@@ -307,6 +345,7 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
         "liquidate": panel.liquidate, "scaled": [],
         "equity": np.full(T, np.nan), "cash": np.full(T, np.nan),
         "positions": np.zeros((T, N)), "recorded": np.zeros(T, dtype=bool),
+        "borrow": np.zeros(T), "venue": _VenueHandle(), "wiped_out": False,
     }
 
     engine = BacktestEngine(BacktestEngineConfig(
@@ -316,9 +355,15 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
     ))
     fee_model = _TableFee(tables, panel.liquidate, {t: i for t, (_, i) in ts_kind.items()},
                           ctx["inst_to_asset"], ccy)
+    # allow_cash_borrowing registers the venue in a process-wide table that Nautilus never
+    # clears, so a second run in the same process would fail: clear it around each run.
+    AccountFactory.deregister_cash_borrowing(VENUE.value)
     engine.add_venue(VENUE, OmsType.NETTING, AccountType.CASH,
                      starting_balances=[Money(init_cash, ccy)], base_currency=ccy,
-                     fee_model=fee_model, bar_execution=True)
+                     fee_model=fee_model, bar_execution=True, modules=[ctx["venue"]],
+                     # borrow fees can take a fully invested long/short book's cash a
+                     # little below 0; the shared planner still never lets a buy overdraw
+                     allow_cash_borrowing=True)
     for inst in instruments:
         engine.add_instrument(inst)
     engine.add_data(bars)
@@ -328,7 +373,10 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
         engine.run()
     finally:
         engine.dispose()
+        AccountFactory.deregister_cash_borrowing(VENUE.value)
 
+    if ctx["wiped_out"]:
+        raise AccountWipedOut("Nautilus: " + strat.problems[-1])
     if strat.problems:
         raise RuntimeError("Nautilus refused orders: " + "; ".join(strat.problems[:5]))
     missing = np.flatnonzero(~ctx["recorded"])
@@ -338,4 +386,4 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
     fills = pd.DataFrame(strat.fills, columns=FILL_COLUMNS).astype(
         {"session": np.int64, "phase": np.int64, "asset": np.int64})
     return BacktestResult("nautilus", panel.sessions, panel.assets, ctx["equity"], ctx["cash"],
-                          ctx["positions"], fills, sorted(ctx["scaled"]))
+                          ctx["positions"], fills, sorted(ctx["scaled"]), ctx["borrow"])
