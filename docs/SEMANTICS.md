@@ -207,7 +207,17 @@ a fill may differ by exactly one step (1e-6), never more. Its fee may differ by 
 `1.5 * fee/|qty| * 1e-6` (the slope bound for a linear rate plus square-root impact). Cash may
 additionally differ by the money those flips explain, `sum(price * 1e-6 + |fee gap|)` so far,
 and equity also by `|position gap| * valuation price` while a one-step position gap is open.
-A position may differ by at most one step per flip so far in that asset. While a one-step
+A flip leaves a small, explained cash gap. On a session whose buys were scaled to fit cash
+(step 6, factor `k = cash_after / B` with `B` the buy cost), that gap moves every scaled buy
+in proportion, so a scaled buy may also differ by `|qty| * G / B + 1e-6`, where `G` is the
+observed cash gap at the previous close, plus the money of the session's differing sells,
+plus `Σ_buys price * 1e-6 * (1 + fee rate)` (any pre-scaling buy size may have flipped,
+which moves `B`); the extra step covers the rounding-down of the scaled size. A sale that closes a position
+may differ by the position gap the asset already had. These differences add their money to
+the cash/equity allowance exactly like flips. Seen on real CRSP data: a weekly reversal
+strategy on $100k, 2000–2022, where 2008 buys of a few thousand dollars moved 2–3 steps (allowances there: median 3.5
+steps, at most 240 steps = $0.03 of stock).
+A position may differ by at most the sum of explained fill gaps so far in that asset. While a one-step
 gap in a short is open it also changes that night's borrow fee, so cash may additionally
 differ by `borrow_rate * Σ(open one-step gap values)` so far. Anything else is still a
 mismatch.

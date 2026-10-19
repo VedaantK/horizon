@@ -4,9 +4,16 @@ Tolerances come from known rounding granularity (see docs/SEMANTICS.md), not fro
 money is stored at 1e-9 in Nautilus, so each fill may contribute up to 1e-9 of drift.
 
 That drift can tip an order size that sits on a half step of the 1e-6 quantity grid to the
-neighbouring step ("grid flip"). A flip is allowed only as exactly one step, and the money
-it explains is added to the cash/equity allowance: price x step plus the fee change, and
-afterwards the value of the one-step position difference while it stays open.
+neighbouring step ("grid flip"). A fill may therefore differ by one step, plus:
+- the position gap the asset already had (closing a position closes what each engine
+  holds), and
+- on a session whose buys were scaled to fit cash, one more step (the scaled size is
+  rounded down) plus `|qty| x G / B`: the scale factor is cash after sells over buy cost B,
+  so a gap G in either moves every scaled buy in proportion. G = the cash gap carried into
+  the open + the money of that session's differing sells + one step of every buy at its
+  price and fee (each pre-scaling size may itself have flipped).
+The money every explained difference accounts for is added to the cash/equity allowance:
+price x |qty gap| plus the fee change, and the value of open position gaps.
 """
 
 from __future__ import annotations
@@ -77,15 +84,16 @@ def _compare(a: BacktestResult, b: BacktestResult,
                             f"phase={int(r['phase'])} asset={a.assets[int(r['asset'])]}")
     both = m[m["_merge"] == "both"]
     dq = (both["qty_a"] - both["qty_b"]).abs()
-    flip = (dq > QTY_TOL) & (dq <= QTY_STEP + QTY_TOL)
-    for _, r in both[dq > QTY_STEP + QTY_TOL].head(10).iterrows():
+    fee_gap = (both["fee_a"] - both["fee_b"]).abs()
+    allowed = _qty_allowance(a, b, both, dq, fee_gap)
+    flip = (dq > QTY_TOL) & (dq <= allowed + QTY_TOL)
+    for _, r in both[dq > allowed + QTY_TOL].head(10).iterrows():
         chk.problems.append(f"qty differs {sessions[int(r['session'])].date()} "
                             f"asset={a.assets[int(r['asset'])]}: {r['qty_a']} vs {r['qty_b']}")
     dp = (both["price_a"] - both["price_b"]).abs() > PRICE_REL * both["price_a"].abs() + 1e-12
     for _, r in both[dp].head(10).iterrows():
         chk.problems.append(f"price differs {sessions[int(r['session'])].date()} "
                             f"asset={a.assets[int(r['asset'])]}: {r['price_a']} vs {r['price_b']}")
-    fee_gap = (both["fee_a"] - both["fee_b"]).abs()
     per_share = (both["fee_a"].abs() / both["qty_a"].abs().where(both["qty_a"] != 0)).fillna(0)
     flip_fee = np.where(flip, FEE_SLOPE * per_share * dq, 0.0)
     dfee = fee_gap > MONEY_TICK + REL_FLOAT * both["fee_a"].abs() + flip_fee
@@ -101,22 +109,22 @@ def _compare(a: BacktestResult, b: BacktestResult,
         cum_fills = cum_fills + np.cumsum(a.borrow > 0)
     tol = MONEY_TICK * (cum_fills + 1) + REL_FLOAT * np.abs(a.equity)
 
-    # Grid flips: cash they explain, and how far each asset's position may drift.
+    # Explained quantity gaps: cash they account for, and how far each position may drift.
     flips = both[flip]
     flip_cash = np.zeros(len(sessions))
-    flip_steps = np.zeros(a.positions.shape)
+    pos_allow = np.zeros(a.positions.shape)
     if len(flips):
         s = flips["session"].to_numpy(dtype=np.int64)
         money = (flips["price_a"].abs() * dq[flip] + fee_gap[flip]).to_numpy()
         flip_cash = np.cumsum(np.bincount(s, weights=money, minlength=len(sessions)))
-        np.add.at(flip_steps, (s, flips["asset"].to_numpy(dtype=np.int64)), 1.0)
-        flip_steps = np.cumsum(flip_steps, axis=0)
+        np.add.at(pos_allow, (s, flips["asset"].to_numpy(dtype=np.int64)), dq[flip].to_numpy())
+        pos_allow = np.cumsum(pos_allow, axis=0)
     dpos = np.abs(a.positions - b.positions)
     open_value = np.zeros(len(sessions))
     if marks is not None:
         open_value = np.nansum(np.where(dpos > QTY_TOL, dpos * np.abs(marks), 0.0), axis=1)
         if a.borrow is not None and a.borrow.any():
-            # a one-step gap in a short position also changes that night's borrow fee
+            # a gap in a short position also changes that night's borrow fee
             short_value = np.nansum(np.where(a.positions < 0, -a.positions * marks, 0.0),
                                     axis=1)
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -138,7 +146,7 @@ def _compare(a: BacktestResult, b: BacktestResult,
             chk.problems.append(f"{label} diverges first at {sessions[i].date()}: "
                                 f"{xa[i]!r} vs {xb[i]!r} (tol {tol[i]:.2e})")
 
-    pos_bad = dpos > QTY_STEP * flip_steps + QTY_TOL
+    pos_bad = dpos > pos_allow + QTY_TOL
     if pos_bad.any():
         i, j = np.argwhere(pos_bad)[0]
         chk.problems.append(f"position differs at {sessions[i].date()} asset={a.assets[j]}: "
@@ -146,6 +154,44 @@ def _compare(a: BacktestResult, b: BacktestResult,
     if a.scaled_sessions != b.scaled_sessions:
         chk.problems.append("buy scaling happened on different sessions")
     return chk
+
+
+def _qty_allowance(a: BacktestResult, b: BacktestResult, both: pd.DataFrame,
+                   dq: pd.Series, fee_gap: pd.Series) -> np.ndarray:
+    """Largest quantity gap each matched fill may have (see the module docstring). Uses the
+    gaps actually observed before the fill; those are checked in their own right."""
+    T = len(a.sessions)
+    s = both["session"].to_numpy(dtype=np.int64)
+    j = both["asset"].to_numpy(dtype=np.int64)
+    prev = np.maximum(s - 1, 0)
+    pos_gap = np.where(s > 0, np.abs(a.positions[prev, j] - b.positions[prev, j]), 0.0)
+    allowed = QTY_STEP + pos_gap
+    scaled = np.zeros(T, dtype=bool)
+    scaled[list(a.scaled_sessions)] = True
+    buy = both["qty_a"].to_numpy() > 0
+    in_scaled = scaled[s] & buy
+    if in_scaled.any():
+        buys = a.fills[a.fills["qty"] > 0]
+        cost = np.bincount(buys["session"].to_numpy(dtype=np.int64),
+                           weights=(buys["qty"] * buys["price"] + buys["fee"]).to_numpy(),
+                           minlength=T)
+        gap_in = np.zeros(T)
+        gap_in[1:] = np.abs(a.cash[:-1] - b.cash[:-1])
+        sell_gap = (~buy) & (dq.to_numpy() > QTY_TOL)
+        sell_money = np.bincount(s[sell_gap], weights=(both["price_a"].abs() * dq + fee_gap)
+                                 .to_numpy()[sell_gap], minlength=T)
+        # Buy cost B can differ too: before scaling, each buy's size may sit one step apart
+        # (a flip), so B moves by up to price x step (plus its fee) per buy.
+        rate = (buys["fee"] / (buys["qty"] * buys["price"])).fillna(0).to_numpy()
+        cost_gap = np.bincount(buys["session"].to_numpy(dtype=np.int64),
+                               weights=(buys["price"].to_numpy() * QTY_STEP * (1 + rate)),
+                               minlength=T)
+        g = gap_in[s] + sell_money[s] + cost_gap[s]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            prop = np.abs(both["qty_a"].to_numpy()) * g / cost[s]
+        # one more step: the scaled size is rounded down to the grid (a floor can flip too)
+        allowed = allowed + np.where(in_scaled, QTY_STEP + np.nan_to_num(prop), 0.0)
+    return allowed
 
 
 def valuation_marks(tr_close: np.ndarray) -> np.ndarray:
