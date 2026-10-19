@@ -156,3 +156,14 @@ and impact is 0.
 Nautilus stores money at 1e-9 precision and rounds each fee. The reference and vectorbt use
 float64. The allowed equity difference is `1e-9 * cumulative_fills + 1e-9 * |equity|`.
 Fills must match exactly in session, asset and price, with quantities equal to 1e-6.
+
+**Grid flips.** Each engine sizes orders from its own pre-trade value, and Nautilus's value can
+differ from the float64 engines by the 1e-9 money rounding above. When `w * V_pre / price`
+sits within that distance of a half step of the 1e-6 grid, `round6` lands on neighbouring
+steps (seen on real CRSP data: 10 of 45,344 fills in a weekly-rebalanced 2000–2022 run). Such
+a fill may differ by exactly one step (1e-6), never more. Its fee may differ by at most
+`1.5 * fee/|qty| * 1e-6` (the slope bound for a linear rate plus square-root impact). Cash may
+additionally differ by the money those flips explain, `sum(price * 1e-6 + |fee gap|)` so far,
+and equity also by `|position gap| * valuation price` while a one-step position gap is open.
+A position may differ by at most one step per flip so far in that asset. Anything else is
+still a mismatch.

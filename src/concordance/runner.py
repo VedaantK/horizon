@@ -9,7 +9,7 @@ import numpy as np
 
 from concordance.costs import CostModel, ExecTables, LiquidityModel, exec_tables
 from concordance.panel import MarketPanel
-from concordance.reconcile import ReconciliationReport, reconcile
+from concordance.reconcile import ReconciliationReport, reconcile, valuation_marks
 from concordance.result import BacktestResult
 from concordance.strategy import Schedule, Strategy, build_schedule
 
@@ -69,7 +69,8 @@ def run(panel: MarketPanel, strategy: Strategy, costs: CostModel | None = None,
     sched = build_schedule(strategy, panel)
     tables = exec_tables(panel, costs or CostModel(), liquidity)
     results = {e: run_engine(e, panel, sched, tables, init_cash) for e in engines}
-    report = reconcile(results) if len(results) > 1 else None
+    report = (reconcile(results, valuation_marks(panel.tr_close))
+              if len(results) > 1 else None)
     if strict and report is not None and not report.ok:
         raise AssertionError(f"engines disagree:\n{report.summary()}")
     return Run(results, report, sched, tables)

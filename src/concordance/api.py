@@ -420,7 +420,7 @@ def run_backtest(request: dict, output_dir: str | Path | None = None,
 
 
 def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
-    from concordance.reconcile import reconcile
+    from concordance.reconcile import reconcile, valuation_marks
     from concordance.report import html_report, metrics
     from concordance.runner import run_engine
     from concordance.strategy import build_schedule
@@ -449,7 +449,8 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
     for e in req["engines"]:
         log(f"engine: {e}")
         results[e] = run_engine(e, panel, sched, tables, req["initial_capital"])
-    report = reconcile(results) if len(results) > 1 else None
+    report = (reconcile(results, valuation_marks(panel.tr_close))
+              if len(results) > 1 else None)
     if report is not None:
         diag["reconciliation"] = report.summary()
         if not report.ok:
