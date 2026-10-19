@@ -31,6 +31,7 @@ import pandas as pd
 
 from concordance.costs import CostModel, LiquidityModel, exec_tables
 from concordance.panel import MarketPanel, PanelError
+from concordance.result import AccountWipedOut
 from concordance.strategy import STOP, TAKE_PROFIT, LookaheadError, Schedule, Strategy
 
 SCHEMA_VERSION = 1
@@ -405,7 +406,9 @@ def run_backtest(request: dict, output_dir: str | Path | None = None,
         from concordance.data.crsp import CoverageError
         from concordance.data.lockbox import LockboxViolation
 
-        if isinstance(e, CoverageError | LockboxViolation | PanelError | FileNotFoundError):
+        if isinstance(e, AccountWipedOut):  # a (terrible) outcome of the strategy itself
+            result["status"] = "strategy_error"
+        elif isinstance(e, CoverageError | LockboxViolation | PanelError | FileNotFoundError):
             result["status"] = "data_error"
         else:
             result["status"] = "error"
@@ -421,7 +424,7 @@ def run_backtest(request: dict, output_dir: str | Path | None = None,
 
 def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
     from concordance.reconcile import reconcile, valuation_marks
-    from concordance.report import html_report, metrics
+    from concordance.report import factor_exposures, html_report, leg_attribution, metrics
     from concordance.runner import run_engine
     from concordance.strategy import build_schedule
     from concordance.validation.dsr import deflated_sharpe
@@ -465,6 +468,13 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
     start = panel.meta.get("warmup_sessions", 0)
     bench = panel.meta.get("benchmark")
     m = metrics(res, start=start, benchmark=bench)
+    m.update(leg_attribution(res, valuation_marks(panel.tr_close), start))
+    ff_path = lake / "ff_factors_daily.parquet"
+    if ff_path.exists():
+        m.update(factor_exposures(res.returns.iloc[max(start, 1):],
+                                  pd.read_parquet(ff_path)))
+    else:
+        diag["warnings"].append("no ff_factors_daily in the lake: factor exposures skipped")
     m["orders"] = _order_stats(sched, res)
     gap = listing_gap_exits(panel, res)
     if len(gap):

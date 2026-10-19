@@ -141,3 +141,46 @@ def test_exit_orders_on_a_short_are_rejected():
 ])
 def test_volume_cap_for_shorts(desired, pos, cap_buy, cap_sell, expected):
     assert _capped.py_func(desired, pos, cap_buy, cap_sell) == expected
+
+
+@pytest.mark.parametrize("engine", ["reference"])
+def test_leg_attribution_by_hand(engine):
+    from concordance.reconcile import valuation_marks
+    from concordance.report import leg_attribution
+
+    # Market-neutral case above: long 100 A 10 -> 12 = +200; short 50 B 20 -> 20 = 0.
+    rows = path("A", closes=[10, 10, 11, 12]) + path("B", closes=[20, 20, 22, 20])
+    panel, r = go(engine, rows, {0: {"A": 1.0, "B": -1.0}})
+    legs = leg_attribution(r, valuation_marks(panel.tr_close))
+    assert legs["long_pnl"] == pytest.approx(200, abs=1e-9)
+    assert legs["short_pnl"] == pytest.approx(0, abs=1e-9)
+    # Exposure at the closes: s0 flat; s1 (1000+1000)/1000; s2 (1100+1100)/1000;
+    # s3 (1200+1000)/1200. Net: 0, 0, 0, 200/1200.
+    assert legs["avg_gross_exposure"] == pytest.approx((0 + 2 + 2.2 + 2200 / 1200) / 4)
+    assert legs["avg_net_exposure"] == pytest.approx((200 / 1200) / 4)
+    # Short-only fall case with borrow: short P&L +200, borrow 1.8 -> equity +198.2.
+    rows = path("A", closes=[10, 10, 8, 8], opens=[10, 10, 9, 8])
+    panel, r = go(engine, rows, {0: {"A": -1.0}, 2: {"A": 0.0}}, costs=BORROW_0P1PCT)
+    legs = leg_attribution(r, valuation_marks(panel.tr_close))
+    assert legs["short_pnl"] == pytest.approx(200, abs=1e-9)
+    assert legs["total_borrow"] == pytest.approx(1.8, abs=1e-9)
+
+
+def test_wiped_out_account_is_a_strategy_outcome(tmp_path):
+    from concordance.api import run_backtest
+
+    rows = path("A", closes=[10, 10, 25, 25])
+    panel = build_panel(long_frame(rows))
+    src = tmp_path / "s.py"
+    src.write_text("from concordance.strategy import Strategy\n"
+                   "class S(Strategy):\n"
+                   "    def decide(self, view):\n"
+                   "        return {'A': -1.0} if view.i == 0 else None\n"
+                   "STRATEGY = S()\n")
+    out = run_backtest({"strategy": {"path": str(src)}, "initial_capital": 1000.0,
+                        "liquidity": None, "validation": {"lookahead_cuts": 0},
+                        "data": {"start": str(panel.sessions[0].date()),
+                                 "end": str(panel.sessions[-1].date())}},
+                       tmp_path / "out", panel=panel)
+    assert out["status"] == "strategy_error"
+    assert "AccountWipedOut" in out["diagnostics"]["messages"][0]

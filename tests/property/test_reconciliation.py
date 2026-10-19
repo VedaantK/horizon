@@ -115,3 +115,18 @@ def test_compiled_reference_matches_pure_python(seed):
     a = reference.run(panel, sched, tables, 100_000.0)
     b = reference.run(panel, sched, tables, 100_000.0, compiled=True)
     assert np.array_equal(a.equity, b.equity) and a.fills.equals(b.fills)
+
+
+@pytest.mark.parametrize("seed", range(0, 40, 4))
+def test_leg_attribution_adds_up_to_equity(seed):
+    from concordance.reconcile import valuation_marks
+    from concordance.report import leg_attribution
+
+    panel = build_panel(random_long_frame(seed))
+    r = run(panel, RandomLongShort(seed), costs=SHORT_COSTS[seed % 3], init_cash=1e6,
+            engines=("reference",)).results["reference"]
+    for start in (0, 5):
+        legs = leg_attribution(r, valuation_marks(panel.tr_close), start)
+        total = legs["long_pnl"] + legs["short_pnl"] - legs["fees_after_start"] \
+            - legs["total_borrow"]
+        assert total == pytest.approx(r.equity[-1] - r.equity[start], abs=1e-6)

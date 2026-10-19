@@ -70,7 +70,7 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
 | `ok` | engines agree; metrics are valid |
 | `rejected` | engines disagree: a Concordance bug, never a strategy result |
 | `lookahead` | the strategy's decisions change when future data is removed |
-| `strategy_error` | the file failed to load, or `decide` raised / returned something invalid |
+| `strategy_error` | the file failed to load, or `decide` raised / returned something invalid, or equity reached 0 with shorts open (`AccountWipedOut`) |
 | `data_error` | coverage too low, lockbox, missing lake files |
 | `invalid_request` | the request itself is wrong |
 | `error` | anything else (traceback in diagnostics) |
@@ -88,6 +88,10 @@ rate is subtracted.
 | `annual_turnover` | traded notional / average equity / years |
 | `total_fees` | commissions + spread + impact, in dollars |
 | `benchmark_cagr`, `benchmark_sharpe` | rebuilt S&P 500 total return, same window |
+| `long_pnl`, `short_pnl` | dollars earned by each side before costs; with `fees_after_start` and `total_borrow` they add up to the change in equity |
+| `avg_gross_exposure`, `avg_net_exposure`, `avg_short_exposure` | (longs + shorts), (longs - shorts), shorts, as fractions of equity, averaged over closes |
+| `factor_alpha_annual`, `factor_alpha_t` | intercept of daily excess returns on Fama-French 5 + momentum (annualized), with a Newey-West (5 lags) t-stat |
+| `factor_betas`, `factor_r2`, `factor_n_days` | loadings on mktrf, smb, hml, rmw, cma, umd; fit; days used |
 | `orders` | stop / take-profit exits (at the open and intraday), limit entries placed and filled |
 | `dsr` | deflated Sharpe ratio using the ledger's effective number of trials |
 | `trials_recorded`, `trials_effective` | trials in this ledger program |
