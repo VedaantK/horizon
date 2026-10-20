@@ -29,7 +29,15 @@ NOT_SUPPORTED = [
     "maintenance-margin calls",
     "annual fundamentals, as-first-reported (unrestated) figures, earnings-announcement "
     "events or analyst data in the strategy view (quarterly Compustat values are restated)",
-    "options, futures, ETFs, bonds or currencies",
+    "options, ETFs, cash bonds or spot currencies (futures: only the markets listed under "
+    "`futures`)",
+]
+
+FUTURES_NOT_SUPPORTED = [
+    "stop-loss, take-profit or limit orders on futures (target weights only)",
+    "calendar-spread or butterfly positions (one continuous position per market)",
+    "markets other than those listed; intraday data",
+    "maintenance-margin calls (a margin cap scales targets instead)",
 ]
 
 
@@ -48,7 +56,7 @@ def capabilities(lake: str | Path | None = None) -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
         "frequency": "daily",
-        "universe": ["sp500"],
+        "universe": ["sp500", "futures"],
         "decision": "at each session's close, from data up to and including that close",
         "execution": {
             "rebalance": "market orders at the next session's open",
@@ -77,4 +85,42 @@ def capabilities(lake: str | Path | None = None) -> dict:
         "statuses": list(STATUSES),
         "datasets": datasets,
         "not_supported": NOT_SUPPORTED,
+        "futures": _futures(files),
+    }
+
+
+def _futures(files: dict) -> dict:
+    """The futures universe (data.universe = "futures"), when the lake has it."""
+    from concordance.api import DEFAULTS, FUTURES_ENGINES
+    from concordance.data.futures import MARKETS
+    from concordance.futures.panel import WEIGHT_LIMITS
+
+    have = files.get("futures_bars", {})
+    if have.get("status") != "ok":
+        return {"available": False}
+    return {
+        "available": True,
+        "request": 'data.universe = "futures"; options in the request\'s "futures" section',
+        "defaults": DEFAULTS["futures"],
+        "markets": {m.root: {"sector": m.sector, "liquid_months": m.months}
+                    for m in MARKETS.values() if m.root in have.get("markets", [])},
+        "data": {"start": have.get("start"), "end": have.get("end"),
+                 "note": "markets join when their data begins (e.g. NQ 1999, 6E 1998, "
+                         "BRN 2003, RB 2005)"},
+        "view_fields": {"open": "held contract's own open (unadjusted)",
+                        "close": "held contract's own settle (unadjusted; jumps at rolls)",
+                        "ret": "excess return of a fully collateralized position (point "
+                               "change over own previous settle; no roll jumps, no interest)",
+                        "member": "market has data that session"},
+        "weights": {**WEIGHT_LIMITS, "meaning": "notional exposure / equity per market"},
+        "account": "margin: positions cost no cash, P&L settles daily, cash earns the "
+                   "daily risk-free rate; integer contracts; initial margin capped at "
+                   "futures.max_margin of equity (targets scaled toward zero)",
+        "rolls": "Panama continuous series; roll at the close futures.sessions_before "
+                 "sessions before the deadline (last trade, or first notice / month before "
+                 "delivery for physical markets); a roll costs two legs",
+        "costs": "per contract per side: futures.commission USD + futures.slippage_ticks "
+                 "ticks",
+        "engines": list(FUTURES_ENGINES),
+        "not_supported": FUTURES_NOT_SUPPORTED,
     }

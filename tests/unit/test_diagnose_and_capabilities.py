@@ -82,4 +82,9 @@ def test_capabilities_come_from_the_enforcing_code(tmp_path):
     assert set(cap["orders"]["long_only"]) <= set(cap["orders"]["fields"])
     assert "tr_close" in cap["view_fields"] and "volume" in cap["view_fields"]
     assert cap["datasets"]["crsp_daily"]["end"] == "2025-12-31"
-    assert cap["universe"] == ["sp500"] and cap["not_supported"]
+    assert cap["universe"] == ["sp500", "futures"] and cap["not_supported"]
+    if cap["futures"]["available"]:  # the real lake has the Datastream futures tables
+        from concordance.futures.panel import WEIGHT_LIMITS
+
+        assert cap["futures"]["engines"] == ["reference", "nautilus"]
+        assert cap["futures"]["weights"]["max_gross"] == WEIGHT_LIMITS["max_gross"]

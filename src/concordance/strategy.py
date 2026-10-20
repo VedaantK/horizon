@@ -177,8 +177,9 @@ def _to_row(decision, panel: MarketPanel) -> np.ndarray:
     limits = panel.meta.get("weight_limits") or {}
     max_net, max_gross = limits.get("max_net", MAX_NET), limits.get("max_gross", MAX_GROSS)
     if row.sum() > max_net + 1e-12:
-        raise ValueError(f"net weight {row.sum():.6f} exceeds {max_net:g}: longs may only "
-                         "be funded by equity and short proceeds, not borrowed cash")
+        why = ("notional limit of the margin account" if limits else
+               "longs may only be funded by equity and short proceeds, not borrowed cash")
+        raise ValueError(f"net weight {row.sum():.6f} exceeds {max_net:g}: {why}")
     gross = np.abs(row).sum()
     if gross > max_gross + 1e-12:
         raise ValueError(f"gross weight {gross:.6f} exceeds {max_gross:g} (sum of |weights|)")

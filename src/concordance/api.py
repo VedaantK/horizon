@@ -37,6 +37,8 @@ from concordance.strategy import STOP, TAKE_PROFIT, LookaheadError, Schedule, St
 SCHEMA_VERSION = 1
 REPO = Path(__file__).resolve().parents[2]
 ENGINES = ("reference", "vectorbt", "nautilus")
+FUTURES_ENGINES = ("reference", "nautilus")  # vectorbt has no margined futures model
+UNIVERSES = ("sp500", "futures")
 
 DEFAULTS: dict = {
     "run_id": None,
@@ -52,6 +54,9 @@ DEFAULTS: dict = {
     "validation": {"program": "default", "placebo": 0, "lookahead_cuts": 3},
     "lockbox": {"unlock_reason": None},
     "report": False,
+    # Used only when data.universe is "futures" (docs/SEMANTICS.md, "Futures").
+    "futures": {"markets": None, "commission": 2.5, "slippage_ticks": 1.0,
+                "max_margin": 0.5, "sessions_before": 5},
 }
 
 # Statuses a result can have. Only "ok" carries metrics you may act on.
@@ -127,8 +132,29 @@ def resolve_request(request: dict) -> dict:
         req["liquidity"] = None
     if not req["strategy"]["path"]:
         raise RequestError("strategy.path is required")
-    if req["data"]["universe"] != "sp500":
-        raise RequestError("data.universe: only 'sp500' is available")
+    if req["data"]["universe"] not in UNIVERSES:
+        raise RequestError(f"data.universe must be one of {UNIVERSES}")
+    if req["data"]["universe"] == "futures":
+        if "engines" not in request:
+            req["engines"] = list(FUTURES_ENGINES)
+        if set(req["engines"]) - set(FUTURES_ENGINES):
+            raise RequestError(f"futures run on {FUTURES_ENGINES} only (vectorbt has no "
+                               "margined futures model)")
+        if req["data"]["customer_links"] or req["data"]["fundamentals"]:
+            raise RequestError("customer_links and fundamentals are stock data")
+        f = req["futures"]
+        from concordance.data.futures import MARKETS
+
+        if f["markets"] is not None and (not isinstance(f["markets"], list)
+                                         or set(f["markets"]) - set(MARKETS)):
+            raise RequestError(f"futures.markets must be a list from {sorted(MARKETS)}")
+        for k in ("commission", "slippage_ticks"):
+            if isinstance(f[k], bool) or not isinstance(f[k], int | float) or f[k] < 0:
+                raise RequestError(f"futures.{k} must be a number >= 0")
+        if not 0 < f["max_margin"] <= 1:
+            raise RequestError("futures.max_margin must be in (0, 1]")
+        if not isinstance(f["sessions_before"], int) or not 0 <= f["sessions_before"] <= 20:
+            raise RequestError("futures.sessions_before must be an integer in [0, 20]")
     for k in ("start", "end"):
         if not req["data"][k]:
             raise RequestError(f"data.{k} is required")
@@ -332,6 +358,8 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
 
     lake = Path(req["data"]["lake"] or default_lake())
     log(f"loading panel {req['data']['start']} .. {req['data']['end']}")
+    if req["data"]["universe"] == "futures":
+        return _load_futures(req, strategy, lake)
     panel = load_sp500_panel(req["data"]["start"], req["data"]["end"], lake=lake,
                              warmup_sessions=strategy.warmup(),
                              unlock_reason=req["lockbox"]["unlock_reason"])
@@ -350,6 +378,32 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
         panel = attach_fundamentals(panel, lake)
         data["fundamentals"] = {**panel.meta["fundamentals"],
                                 "sha256": _sha256_file(lake / "comp_fundq.parquet")}
+    return panel, lake, data
+
+
+def _load_futures(req: dict, strategy: Strategy, lake: Path):
+    from dataclasses import replace
+
+    from concordance.data import lockbox
+    from concordance.data.futures import load_futures_panel
+
+    lockbox.enforce(req["data"]["end"], req["lockbox"]["unlock_reason"])
+    f = req["futures"]
+    panel = load_futures_panel(req["data"]["start"], req["data"]["end"], lake,
+                               roots=f["markets"], sessions_before=f["sessions_before"],
+                               warmup_sessions=strategy.warmup())
+    fd = panel.meta["futures"]
+    specs = tuple(replace(s, commission=float(f["commission"]),
+                          slippage_ticks=float(f["slippage_ticks"])) for s in fd.specs)
+    panel.meta["futures"] = replace(fd, specs=specs)
+    panel.meta["warmup_sessions"] = strategy.warmup()
+    lm = lake / "manifest.json"
+    data = {"lake": str(lake), "universe": "futures",
+            "lake_manifest_sha256": _sha256_file(lm) if lm.exists() else None,
+            "futures": {"bars_sha256": _sha256_file(lake / "futures_bars.parquet"),
+                        "contracts_sha256": _sha256_file(lake / "futures_contracts.parquet"),
+                        "markets": list(panel.assets),
+                        "skipped_contracts": panel.meta.get("skipped_contracts", {})}}
     return panel, lake, data
 
 
@@ -471,6 +525,8 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
         raise
     except Exception as e:
         raise StrategyError(f"strategy failed while deciding: {type(e).__name__}: {e}") from e
+    if panel.meta.get("account") == "margin":
+        return _evaluate_futures(req, panel, strategy, sched, out, lake, log, diag)
     tables = request_tables(req, panel)
     results = {}
     for e in req["engines"]:
@@ -535,6 +591,74 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
                     benchmark=bench, start=start)
         artifacts["report"] = "report.html"
     artifacts.update(strategy="strategy.py", request="request.json")
+    return {"status": "ok", "metrics": m, "artifacts": artifacts, "diagnostics": diag}
+
+
+def _evaluate_futures(req, panel, strategy, sched, out, lake, log, diag) -> dict:
+    """Margin-account evaluation: reference and Nautilus must agree exactly on positions
+    and fills, and on equity to within money rounding."""
+    from concordance.futures import engine as fut_ref
+    from concordance.futures import nautilus as fut_nt
+    from concordance.futures.reconcile import reconcile_futures
+    from concordance.report import factor_exposures, metrics
+    from concordance.validation.dsr import deflated_sharpe
+    from concordance.validation.ledger import TrialLedger
+
+    if sched.uses_orders:
+        raise StrategyError("futures take target weights only (no stop, take-profit or "
+                            "limit orders)")
+    rules = fut_ref.MarginRules(max_margin=float(req["futures"]["max_margin"]))
+    runners = {"reference": fut_ref.run, "nautilus": fut_nt.run}
+    results = {}
+    for e in req["engines"]:
+        log(f"engine: {e}")
+        results[e] = runners[e](panel, sched, req["initial_capital"], rules)
+    if len(results) > 1:
+        rep = reconcile_futures(results["reference"], results["nautilus"])
+        diag["reconciliation"] = rep["summary"]
+        if not rep["ok"]:
+            return {"status": "rejected",
+                    "diagnostics": {**diag, "messages": diag["messages"]
+                                    + ["engines disagree: result rejected"]}}
+    else:
+        diag["warnings"].append("single engine: not reconciled")
+    res = results.get("reference") or next(iter(results.values()))
+    start = panel.meta.get("warmup_sessions", 0)
+    m = metrics(res, start=start, benchmark=None)
+    ff_path = lake / "ff_factors_daily.parquet"
+    if ff_path.exists():
+        m.update(factor_exposures(res.returns.iloc[max(start, 1):],
+                                  pd.read_parquet(ff_path)))
+    fills = res.fills
+    m["n_rolls"] = int((fills["phase"] == 2).sum())
+    m["roll_fees"] = float(fills.loc[fills["phase"] == 2, "fee"].sum())
+    m["margin_scaled_sessions"] = len(res.scaled_sessions)
+    held = res.positions[start:] != 0
+    m["avg_markets_held"] = float(held.sum(axis=1).mean()) if len(held) else 0.0
+    if req["validation"]["placebo"]:
+        diag["warnings"].append("the stock placebo does not apply to futures; skipped")
+    rets = res.returns.iloc[max(start, 1):]
+    ledger = TrialLedger(root=lake / "ledger", program=req["validation"]["program"])
+    params = getattr(strategy, "params", req["strategy"]["params"])
+    trial = ledger.record(getattr(strategy, "name", type(strategy).__name__), params, rets,
+                          note=f"run {req['run_id']}")
+    n_eff = max(ledger.n_effective(), 1.0)
+    m["dsr"] = deflated_sharpe(rets.to_numpy(), n_trials=n_eff).annualized()
+    m["trials_recorded"] = ledger.n_trials()
+    m["trials_effective"] = n_eff
+    m["trial_hash"] = trial
+    m["equity_sha256"] = equity_hash(res.equity)
+    eq = pd.DataFrame({"date": panel.sessions, "equity": res.equity, "cash": res.cash,
+                       "gross_exposure": np.nan, "n_positions": (res.positions != 0).sum(axis=1),
+                       "benchmark_return": np.nan})
+    eq.to_parquet(out / "equity.parquet", index=False)
+    res.fills_frame().to_parquet(out / "fills.parquet", index=False)
+    pos = pd.DataFrame(res.positions, index=panel.sessions, columns=panel.assets)
+    pos.stack().rename("contracts").reset_index().query("contracts != 0").to_parquet(
+        out / "positions.parquet", index=False)
+    artifacts = {"equity": "equity.parquet", "fills": "fills.parquet",
+                 "positions": "positions.parquet", "strategy": "strategy.py",
+                 "request": "request.json"}
     return {"status": "ok", "metrics": m, "artifacts": artifacts, "diagnostics": diag}
 
 

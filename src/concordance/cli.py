@@ -37,6 +37,14 @@ def cmd_ingest(a):
     print(json.dumps(ingest(Path(a.raw_dir), Path(a.lake) if a.lake else None), indent=2))
 
 
+def cmd_ingest_futures(a):
+    from concordance.data.futures import ingest as ingest_futures
+    from concordance.data.ingest import default_lake
+
+    lake = Path(a.lake) if a.lake else default_lake()
+    print(json.dumps(ingest_futures(Path(a.raw), lake), indent=2))
+
+
 def cmd_link_customers(a):
     from concordance.data.customers import link_customers
 
@@ -202,6 +210,12 @@ def main(argv=None):
     s.add_argument("raw_dir")
     s.add_argument("--lake")
     s.set_defaults(fn=cmd_ingest)
+
+    s = sub.add_parser("ingest-futures",
+                       help="WRDS Datastream futures export (.csv.gz or .parquet) -> lake")
+    s.add_argument("raw")
+    s.add_argument("--lake", default=None)
+    s.set_defaults(fn=cmd_ingest_futures)
 
     s = sub.add_parser("link-customers",
                        help="match customer names and build lake/customer_links.parquet")
