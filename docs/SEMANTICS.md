@@ -232,3 +232,46 @@ A position may differ by at most the sum of explained fill gaps so far in that a
 gap in a short is open it also changes that night's borrow fee, so cash may additionally
 differ by `borrow_rate * Σ(open one-step gap values)` so far. Anything else is still a
 mismatch.
+
+## Futures (margin account: `futures/engine.py`, `futures/nautilus.py`)
+
+Futures panels have one asset per market. They're built from Panama continuous series
+(`futures/continuous.py`), with a roll at the close `sessions_before` sessions before the
+front contract's last trade or first-notice deadline.
+
+**What strategies see:**
+- `open` and `close`: the held contract's own (unadjusted) prices.
+- `ret`: its point change over its own previous settle. That's an excess return with no
+  interest included.
+- Strategies never see adjusted levels, because those include future roll gaps.
+
+**What engines use:** only differences of adjusted prices. These equal the held contract's
+own changes, including across a roll.
+
+Weights are **notional exposure as a fraction of equity**. Net and gross limits come from
+the panel: `|net|, gross <= 8` instead of the cash account's 1 and 2.
+
+### Session i, in order
+
+1. **Interest.** Cash earns `rf[i]`, the daily Fama-French risk-free return. Cash is equity,
+   because P&L settles daily and positions cost no cash.
+2. **Open, when a target was decided at the previous close:**
+   - Held contracts mark from the previous adjusted settle to the adjusted open.
+   - Targets become integer contracts: `round_half_away(w * E / (mult * open))`, where E is
+     equity at the previous close and `open` is unadjusted.
+   - If the initial margin needed exceeds `max_margin * E`, every target is scaled by the
+     same factor and rounded toward zero. Margin is `|q| * mult * open * margin_rate`.
+   - Each change trades at `open`, for a fee per contract of
+     `commission + slippage_ticks * tick * mult`.
+3. **Close.** Positions mark to the adjusted settle. A market with no bar marks nothing, and
+   the next bar marks from the last settle.
+4. **Roll.** If the series moves to the next contract after this close, the position keeps
+   its contract count. It pays `2 * |q| * fee per contract` (two legs) and is recorded as a
+   phase-2 fill with qty 0 at the old contract's settle.
+
+**Engines:** futures reconcile between **reference and Nautilus**. vectorbt has no margined
+futures model. Nautilus uses a MARGIN account and `FuturesContract` instruments with the
+market multiplier. Its prices are shifted per market by a constant so they stay positive
+(differences are unchanged). Interest and roll fees are booked through the venue ledger.
+Hand-computed: `tests/golden/test_golden_futures.py`. Random books:
+`tests/unit/test_futures_engines.py`.
