@@ -147,6 +147,14 @@ def cmd_diagnose(a):
     _done(0 if out["ok"] else 1)
 
 
+def cmd_ingest_us(a):
+    from concordance.data.ingest import default_lake
+    from concordance.data.us_universe import ingest_us
+
+    lake = Path(a.lake) if a.lake else default_lake()
+    print(json.dumps(ingest_us(Path(a.raw_dir), lake), indent=2, default=str))
+
+
 def cmd_build_sp500(a):
     from concordance.data.ingest import default_lake
     from concordance.overlay import build_sp500_index
@@ -253,6 +261,12 @@ def main(argv=None):
     s.add_argument("raw")
     s.add_argument("--lake", default=None)
     s.set_defaults(fn=cmd_ingest_futures)
+
+    s = sub.add_parser("ingest-us",
+                       help="all-US-stocks exports (small caps) -> *_us lake datasets")
+    s.add_argument("raw_dir")
+    s.add_argument("--lake", default=None)
+    s.set_defaults(fn=cmd_ingest_us)
 
     s = sub.add_parser("build-sp500",
                        help="rebuild the S&P 500 total-return index into the lake")
