@@ -45,6 +45,14 @@ def cmd_ingest_futures(a):
     print(json.dumps(ingest_futures(Path(a.raw), lake), indent=2))
 
 
+def cmd_ingest_rf(a):
+    from concordance.data.ingest import default_lake
+    from concordance.data.riskfree import ingest_rf
+
+    lake = Path(a.lake) if a.lake else default_lake()
+    print(json.dumps(ingest_rf(Path(a.raw), lake), indent=2))
+
+
 def cmd_link_customers(a):
     from concordance.data.customers import link_customers
 
@@ -216,6 +224,12 @@ def main(argv=None):
     s.add_argument("raw")
     s.add_argument("--lake", default=None)
     s.set_defaults(fn=cmd_ingest_futures)
+
+    s = sub.add_parser("ingest-rf",
+                       help="Ken French daily factors file -> risk-free rate before 1990")
+    s.add_argument("raw")
+    s.add_argument("--lake", default=None)
+    s.set_defaults(fn=cmd_ingest_rf)
 
     s = sub.add_parser("link-customers",
                        help="match customer names and build lake/customer_links.parquet")

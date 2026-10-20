@@ -200,6 +200,9 @@ def _record_in_manifest(lake: Path, raw: Path, bars: pd.DataFrame, contracts: pd
     path.write_text(json.dumps(manifest, indent=2))
 
 
+FIRST_YEAR_DAYS = 400  # a roll gap this soon after a market's first bar is a vendor artifact
+
+
 def _chain(contracts: list[Contract], sessions_before: int) -> tuple[list[Contract], list]:
     """The contracts actually held, in order. A next contract with no settle on or before
     the front's roll date (a hole in the vendor's history) is skipped for the following
@@ -223,8 +226,8 @@ def _chain(contracts: list[Contract], sessions_before: int) -> tuple[list[Contra
                 rest = rest[k + 1:]
                 break
         else:
-            raise ValueError(f"{front.id}: no later contract has a settle by its roll date "
-                             f"{cand.date()}")
+            raise RollGap(front, f"{front.id}: no later contract has a settle by its roll "
+                                 f"date {cand.date()}")
     return chain, skipped
 
 
@@ -237,6 +240,7 @@ def load_series(root: str, lake: Path, sessions: pd.DatetimeIndex, sessions_befo
     cons = cons[cons["liquid"]].sort_values("deadline")
     bars = pd.read_parquet(lake / "futures_bars.parquet", filters=[("root", "==", root)])
     bars["date"] = pd.to_datetime(bars["date"])
+    first_bar = bars["date"].min()
     bars = bars[bars["date"].isin(sessions)]
     lo, hi = sessions[0], sessions[-1]
     # Contracts that can be held inside the window: deadline on/after its start, plus only
@@ -256,9 +260,30 @@ def load_series(root: str, lake: Path, sessions: pd.DatetimeIndex, sessions_befo
                                   bars=b))
     if len(contracts) < 2:
         raise NoData(f"{root}: fewer than two contracts in the window")
-    chain, skipped = _chain(contracts, sessions_before)
+    try:
+        chain, skipped = _chain(contracts, sessions_before)
+    except RollGap as e:
+        # Datastream's first year of a market holds only contracts expiring that year (LE
+        # 1979), so its first roll can be impossible: the market starts after that contract,
+        # reported as skipped. A hole anywhere later is real and raises.
+        if e.front.deadline - first_bar > pd.Timedelta(days=FIRST_YEAR_DAYS):
+            raise
+        k = next(i for i, c in enumerate(contracts) if c is e.front)
+        dropped, contracts = contracts[:k + 1], contracts[k + 1:]
+        if len(contracts) < 2:
+            raise NoData(f"{root}: no rollable contracts after its first year") from None
+        chain, skipped = _chain(contracts, sessions_before)
+        skipped = [(c.id, "first-year history") for c in dropped] + skipped
     series, table = build_continuous(chain, sessions_before=sessions_before)
     return series[(series.index >= lo) & (series.index <= hi)], table, skipped
+
+
+class RollGap(ValueError):
+    """No later contract has a settle by `front`'s roll date."""
+
+    def __init__(self, front: Contract, message: str):
+        super().__init__(message)
+        self.front = front
 
 
 class NoData(ValueError):
@@ -283,8 +308,9 @@ def load_futures_panel(start, end, lake: Path, roots=None, sessions_before: int 
         except NoData:
             continue  # only "no contracts in this window"; any other problem raises
         series[root], rolls[root], skipped[root] = s, t, sk
-    ff = pd.read_parquet(Path(lake) / "ff_factors_daily.parquet", columns=["date", "rf"])
-    rf = ff.set_index(pd.to_datetime(ff["date"]))["rf"]
+    from concordance.data.riskfree import load_rf
+
+    rf = load_rf(lake)
     missing_rf = sessions.difference(rf.index)
     if len(missing_rf) > 5:
         raise ValueError(f"risk-free rate missing on {len(missing_rf)} sessions")

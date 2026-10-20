@@ -253,7 +253,7 @@ the panel: `|net|, gross <= 8` instead of the cash account's 1 and 2.
 
 ### Session i, in order
 
-1. **Interest.** Cash earns `rf[i]`, the daily Fama-French risk-free return. Cash is equity,
+1. **Interest.** Cash earns `rf[i]`, the daily Fama-French risk-free return (WRDS `ff_factors_daily`; before it starts in 1990, the identical RF series from Ken French's data library, `concordance ingest-rf`, `lake/rf_daily.parquet`). Cash is equity,
    because P&L settles daily and positions cost no cash.
 2. **Open, when a target was decided at the previous close:**
    - Held contracts mark from the previous adjusted settle to the adjusted open.
