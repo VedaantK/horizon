@@ -48,3 +48,13 @@ def test_adjusted_levels_can_go_negative_without_breaking_pnl():
     d_raw = np.diff(fd.close_unadj, axis=0)
     ok = same & np.isfinite(d_adj) & np.isfinite(d_raw)
     np.testing.assert_allclose(d_adj[ok], d_raw[ok], atol=1e-9)
+
+
+def test_nautilus_contract_counts_are_exact_integers():
+    from nautilus_trader.model.objects import Quantity
+
+    from concordance.futures.nautilus import contracts
+
+    # float(Quantity(65251, 0)) is 65251.00000000001 in Nautilus's high-precision mode.
+    for n in (5, 65251, 119930, 236507):
+        assert contracts(Quantity(n, 0)) == float(n)

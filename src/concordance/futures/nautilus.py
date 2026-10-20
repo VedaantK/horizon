@@ -52,13 +52,19 @@ from concordance.strategy import Schedule
 BAR_VOLUME = Quantity(1_000_000_000, 0)  # whole contracts: size precision 0
 
 
+def contracts(q: Quantity) -> float:
+    """Exact contract count. float(Quantity) divides a 1e16-scaled integer and can land one
+    ulp off for large counts (65251 -> 65251.00000000001); the decimal is exact."""
+    return float(q.as_decimal())
+
+
 class _PerContractFee(FeeModel):
     def __init__(self, fee_per, inst_to_market, ccy):
         super().__init__()
         self.fee_per, self.inst_to_market, self.ccy = fee_per, inst_to_market, ccy
 
     def get_commission(self, order, fill_qty, fill_px, instrument):
-        return Money(float(fill_qty) * self.fee_per[self.inst_to_market[instrument.id]],
+        return Money(contracts(fill_qty) * self.fee_per[self.inst_to_market[instrument.id]],
                      self.ccy)
 
 
@@ -141,7 +147,7 @@ class _Executor(NautilusStrategy):
         j = c["inst_to_market"][event.instrument_id]
         sign = 1.0 if event.order_side == OrderSide.BUY else -1.0
         # Record the contract's own (unadjusted) open, as the reference does.
-        self.fills.append((i, 0, j, sign * float(event.last_qty),
+        self.fills.append((i, 0, j, sign * contracts(event.last_qty),
                            float(c["fd"].open_unadj[i, j]), event.commission.as_double()))
 
     def on_order_denied(self, event):
