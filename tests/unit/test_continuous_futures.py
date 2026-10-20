@@ -54,3 +54,15 @@ def test_no_overlap_in_time_is_an_error():
     nxt = Contract("M21", pd.Timestamp("2021-06-18"), bars=bars(S[9:], [120]))
     with pytest.raises(ValueError, match="cannot roll in time"):
         build_continuous([front, nxt], sessions_before=2)
+
+
+def test_roll_chain_works_before_1990():
+    # Futures research starts 1990-06 with a 12-month warmup, so the first rolls are in 1989.
+    from concordance.data.futures import _chain
+
+    s = pd.DatetimeIndex(pd.to_datetime(["1989-06-12", "1989-06-13", "1989-06-14",
+                                         "1989-06-15", "1989-06-16", "1989-06-19"]))
+    front = Contract("M89", pd.Timestamp("1989-06-20"), bars=bars(s, range(100, 106)))
+    nxt = Contract("U89", pd.Timestamp("1989-09-19"), bars=bars(s, range(110, 116)))
+    chain, skipped = _chain([front, nxt], sessions_before=2)
+    assert [c.id for c in chain] == ["M89", "U89"] and skipped == []

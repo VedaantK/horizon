@@ -11,7 +11,7 @@ import pandas as pd
 
 @lru_cache(maxsize=4)
 def calendar(name: str = "XNYS"):
-    return xcals.get_calendar(name, start="1990-01-01")
+    return xcals.get_calendar(name, start="1980-01-01")
 
 
 def is_last_session_of_month(date, name: str = "XNYS") -> bool:
