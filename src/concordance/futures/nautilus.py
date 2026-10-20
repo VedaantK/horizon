@@ -49,7 +49,6 @@ from concordance.panel import PRICE_DECIMALS, MarketPanel
 from concordance.result import FILL_COLUMNS, AccountWipedOut, BacktestResult
 from concordance.strategy import Schedule
 
-
 BAR_VOLUME = Quantity(1_000_000_000, 0)  # whole contracts: size precision 0
 
 
