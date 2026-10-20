@@ -147,6 +147,35 @@ def cmd_diagnose(a):
     _done(0 if out["ok"] else 1)
 
 
+def cmd_build_sp500(a):
+    from concordance.data.ingest import default_lake
+    from concordance.overlay import build_sp500_index
+
+    print(json.dumps(build_sp500_index(Path(a.lake) if a.lake else default_lake()), indent=2))
+
+
+def cmd_crash_protection(a):
+    """Recompute the crash-protection report for a saved run (equity.parquet + request)."""
+    import pandas as pd
+
+    from concordance.api import resolve_request
+    from concordance.data.ingest import default_lake
+    from concordance.overlay import crash_protection
+
+    run = Path(a.run_dir)
+    raw = json.loads((run / "request.json").read_text())
+    raw["strategy"]["path"] = str(run / "strategy.py")
+    req = resolve_request(raw)
+    eq = pd.read_parquet(run / "equity.parquet").set_index("date")
+    start = pd.Timestamp(json.loads((run / "result.json").read_text())["metrics"]["start"])
+    rets = eq["equity"].pct_change().loc[start:].iloc[1:]
+    lake = Path(req["data"]["lake"] or default_lake())
+    cost = req["costs"]["commission_bps"] + req["costs"]["default_half_spread_bps"]
+    bench = eq["benchmark_return"] if "benchmark_return" in eq else None
+    out, _ = crash_protection(rets, lake, cost, benchmark=bench)
+    print(json.dumps(out, indent=2))
+
+
 def cmd_validate(a):
     from concordance.authoring.validate import validate_file
 
@@ -224,6 +253,16 @@ def main(argv=None):
     s.add_argument("raw")
     s.add_argument("--lake", default=None)
     s.set_defaults(fn=cmd_ingest_futures)
+
+    s = sub.add_parser("build-sp500",
+                       help="rebuild the S&P 500 total-return index into the lake")
+    s.add_argument("--lake", default=None)
+    s.set_defaults(fn=cmd_build_sp500)
+
+    s = sub.add_parser("crash-protection",
+                       help="crash-protection report for a saved stock run")
+    s.add_argument("run_dir")
+    s.set_defaults(fn=cmd_crash_protection)
 
     s = sub.add_parser("ingest-rf",
                        help="Ken French daily factors file -> risk-free rate before 1990")

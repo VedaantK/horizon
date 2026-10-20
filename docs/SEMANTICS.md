@@ -279,3 +279,22 @@ market multiplier. Its prices are shifted per market by a constant so they stay 
 (differences are unchanged). Interest and roll fees are booked through the venue ledger.
 Hand-computed: `tests/golden/test_golden_futures.py`. Random books:
 `tests/unit/test_futures_engines.py`.
+
+## Crash protection (`overlay.py`, stock runs only)
+
+A report on the reconciled daily returns, not a fourth engine: the strategy's fills are
+unchanged. One fixed rule, declared before any strategy was scored with it:
+
+1. At the close of each month's last session, compare the S&P 500 total-return index
+   (rebuilt from members, `lake/sp500_tr_daily.parquet`, `concordance build-sp500`) with its
+   200-session simple average. Below it: protected. At or above: invested.
+2. The switch trades at the next open, and that whole session still earns the old state.
+   The new state first earns the return of the session after it.
+3. Protected sessions earn the safe asset instead of the strategy: T-bills (daily rf), or
+   bonds (rf + the 10-year note futures excess return; bond-market holidays earn rf only).
+4. Each switch costs one full turnover at `commission_bps + default_half_spread_bps`.
+5. On the switch back, the portfolio buys the book the strategy holds that day.
+
+`metrics.crash_protection` reports both safe assets and the S&P 500 under the same rule
+(`benchmark`); daily values are in `crash_protection.parquet`. If the index or rf does not
+cover the run, the run still completes, with a warning.

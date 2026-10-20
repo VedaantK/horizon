@@ -584,6 +584,12 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
                                     "and limit orders are not part of it")
     m["equity_sha256"] = equity_hash(res.equity)
     artifacts = _write_artifacts(out, panel, res, sched)
+    cp = _crash_protection(rets, lake, req["costs"], bench, diag)
+    if cp is not None:
+        m["crash_protection"], frame = cp
+        frame.rename_axis("date").reset_index().to_parquet(out / "crash_protection.parquet",
+                                                           index=False)
+        artifacts["crash_protection"] = "crash_protection.parquet"
     if req["report"]:
         html_report(res, out / "report.html", title=getattr(strategy, "name", "strategy"),
                     extra={"reconciliation": diag.get("reconciliation", "single engine"),
@@ -592,6 +598,20 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
         artifacts["report"] = "report.html"
     artifacts.update(strategy="strategy.py", request="request.json")
     return {"status": "ok", "metrics": m, "artifacts": artifacts, "diagnostics": diag}
+
+
+def _crash_protection(rets, lake, costs, bench, diag):
+    """The crash-protection report (overlay.py); a missing input is a warning, because the
+    run itself is complete without it."""
+    from concordance.overlay import crash_protection
+
+    cost = costs["commission_bps"] + costs["default_half_spread_bps"]
+    try:
+        return crash_protection(rets, lake, cost, benchmark=None if bench is None
+                                else pd.Series(bench))
+    except (FileNotFoundError, ValueError) as e:
+        diag["warnings"].append(f"crash protection not reported: {e}")
+        return None
 
 
 def _evaluate_futures(req, panel, strategy, sched, out, lake, log, diag) -> dict:
