@@ -239,6 +239,10 @@ Futures panels have one asset per market. They're built from Panama continuous s
 (`futures/continuous.py`), with a roll at the close `sessions_before` sessions before the
 front contract's last trade or first-notice deadline.
 
+Sessions are XNYS days. A day on which no market has a settle (Chicago was closed on some
+1970s election days and days near Christmas) is dropped from the panel, and its interest
+is compounded into the next kept session (`panel.meta["closed_sessions"]`).
+
 **What strategies see:**
 - `open` and `close`: the held contract's own (unadjusted) prices.
 - `ret`: its point change over its own previous settle. That's an excess return with no

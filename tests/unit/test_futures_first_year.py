@@ -37,3 +37,16 @@ def test_a_later_gap_still_raises(tmp_path):
                           ("G1981", "1981-01-30", "1981-01-02", "1981-02-20")])
     with pytest.raises(RollGap, match="LEZ1980"):
         load_series("LE", tmp_path, xnys_sessions("1979-01-02", "1981-01-20"))
+
+
+def test_a_session_no_market_trades_is_dropped_and_its_interest_carried():
+    from concordance.data.futures import _drop_closed_sessions
+
+    sessions = pd.DatetimeIndex(pd.to_datetime(["1974-11-04", "1974-11-05", "1974-11-06"]))
+    series = {"ZC": pd.DataFrame({"close": [1.0, float("nan"), 1.0]}, index=sessions)}
+    rf = pd.Series([0.001, 0.002, 0.003], index=sessions)
+    kept, rf_kept, closed = _drop_closed_sessions(series, sessions, rf)
+    assert closed.tolist() == [pd.Timestamp("1974-11-05")]
+    assert kept.tolist() == [pd.Timestamp("1974-11-04"), pd.Timestamp("1974-11-06")]
+    # 11-06 earns its own day and election day's: 1.002 * 1.003 - 1 = 0.005006
+    assert rf_kept.tolist() == pytest.approx([0.001, 0.005006])

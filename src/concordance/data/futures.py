@@ -314,11 +314,32 @@ def load_futures_panel(start, end, lake: Path, roots=None, sessions_before: int 
     missing_rf = sessions.difference(rf.index)
     if len(missing_rf) > 5:
         raise ValueError(f"risk-free rate missing on {len(missing_rf)} sessions")
+    sessions, rf, closed = _drop_closed_sessions(series, sessions, rf)
     panel = build_futures_panel(series, {r: spec(r) for r in series}, rf, sessions=sessions)
+    panel.meta["closed_sessions"] = [str(d.date()) for d in closed]
     panel.meta["rolls"] = rolls
     panel.meta["skipped_contracts"] = {r: v for r, v in skipped.items() if v}
     panel.meta["sectors"] = {r: MARKETS[r].sector for r in series}
     return panel
+
+
+def _drop_closed_sessions(series: dict, sessions: pd.DatetimeIndex, rf: pd.Series):
+    """NYSE days on which no market has a settle (Chicago closed on election days and some
+    days around Christmas in the 1970s) are dropped; their interest is compounded into the
+    next kept session, so cash earns the same as if they were held."""
+    traded = pd.DatetimeIndex([])
+    for s in series.values():
+        traded = traded.union(s.index[s["close"].notna()])
+    closed = sessions.difference(traded)
+    if not len(closed):
+        return sessions, rf, closed
+    kept = sessions.difference(closed)
+    if closed[-1] > kept[-1]:
+        raise ValueError(f"no market trades on the last session {closed[-1].date()}")
+    r = rf.reindex(sessions).fillna(0.0)
+    owner = kept[kept.searchsorted(sessions)]  # each session's interest goes to the next kept
+    rf_kept = (1 + r).groupby(owner).prod() - 1
+    return kept, rf_kept, closed
 
 
 def roll_report(panel) -> pd.DataFrame:
