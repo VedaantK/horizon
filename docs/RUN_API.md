@@ -43,6 +43,17 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
 - `data.fundamentals: true` loads `lake/comp_fundq.parquet` (with `lake/ccm_link.parquet`)
   so the strategy can call `view.fundamental(name)`. The manifest records the file's SHA-256,
   the quarter count and the share of quarters whose report date was imputed.
+- `data.universe`:
+  - `sp500`: S&P 500 members as of each date.
+  - `us_liquid`: all US common stocks on NYSE, NYSE American and Nasdaq.
+    - **Members:** each session, the stocks that at the previous close traded at $5 or more
+      with market cap at or above that day's NYSE 20th percentile.
+    - **`view['sp500']`** marks S&P 500 member days.
+    - **Benchmark:** the members' cap-weighted total return. The equal-weighted one is in
+      `meta`.
+    - **Data:** `lake/crsp_daily_us.parquet`; with `data.fundamentals`,
+      `comp_fundq_us.parquet` (`concordance ingest-us DIR --daily`).
+  - `futures`: see docs/SEMANTICS.md, "Futures".
 - `strategy.params` go to the file's `make_strategy(**params)` (docs/STRATEGY_CONTRACT.md).
   A relative `strategy.path` in a request file is relative to that file.
 - `data.start` is the first evaluated session; warm-up history before it is loaded

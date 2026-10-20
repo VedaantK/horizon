@@ -38,7 +38,7 @@ SCHEMA_VERSION = 1
 REPO = Path(__file__).resolve().parents[2]
 ENGINES = ("reference", "vectorbt", "nautilus")
 FUTURES_ENGINES = ("reference", "nautilus")  # vectorbt has no margined futures model
-UNIVERSES = ("sp500", "futures")
+UNIVERSES = ("sp500", "us_liquid", "futures")
 
 DEFAULTS: dict = {
     "run_id": None,
@@ -360,12 +360,23 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
     log(f"loading panel {req['data']['start']} .. {req['data']['end']}")
     if req["data"]["universe"] == "futures":
         return _load_futures(req, strategy, lake)
-    panel = load_sp500_panel(req["data"]["start"], req["data"]["end"], lake=lake,
-                             warmup_sessions=strategy.warmup(),
-                             unlock_reason=req["lockbox"]["unlock_reason"])
+    us = req["data"]["universe"] == "us_liquid"
+    if us:
+        from concordance.data.us_universe import load_us_panel
+
+        panel = load_us_panel(req["data"]["start"], req["data"]["end"], lake=lake,
+                              warmup_sessions=strategy.warmup(),
+                              unlock_reason=req["lockbox"]["unlock_reason"])
+    else:
+        panel = load_sp500_panel(req["data"]["start"], req["data"]["end"], lake=lake,
+                                 warmup_sessions=strategy.warmup(),
+                                 unlock_reason=req["lockbox"]["unlock_reason"])
     lm = lake / "manifest.json"
-    data = {"lake": str(lake),
+    data = {"lake": str(lake), "universe": req["data"]["universe"],
             "lake_manifest_sha256": _sha256_file(lm) if lm.exists() else None}
+    if us:
+        data["universe_rule"] = panel.meta["universe_rule"]
+        data["members_per_day"] = round(panel.meta["members_per_day"], 1)
     if req["data"]["customer_links"]:
         from concordance.data.customers import attach_customer_links
 
@@ -375,9 +386,10 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
     if req["data"]["fundamentals"]:
         from concordance.data.fundamentals import attach_fundamentals
 
-        panel = attach_fundamentals(panel, lake)
-        data["fundamentals"] = {**panel.meta["fundamentals"],
-                                "sha256": _sha256_file(lake / "comp_fundq.parquet")}
+        fundq = "comp_fundq_us.parquet" if us else "comp_fundq.parquet"
+        panel = attach_fundamentals(panel, lake, fundq)
+        data["fundamentals"] = {**panel.meta["fundamentals"], "file": fundq,
+                                "sha256": _sha256_file(lake / fundq)}
     return panel, lake, data
 
 

@@ -53,10 +53,11 @@ def capabilities(lake: str | Path | None = None) -> dict:
     datasets = {name: {k: f.get(k) for k in ("start", "end", "rows") if f.get(k) is not None}
                 for name, f in sorted(files.items())}
     order_fields = [f.name for f in fields(Orders)]
+    us = files.get("crsp_daily_us", {}).get("status") == "ok"
     return {
         "schema_version": SCHEMA_VERSION,
         "frequency": "daily",
-        "universe": ["sp500", "futures"],
+        "universe": ["sp500", *(["us_liquid"] if us else []), "futures"],
         "decision": "at each session's close, from data up to and including that close",
         "execution": {
             "rebalance": "market orders at the next session's open",
@@ -84,8 +85,32 @@ def capabilities(lake: str | Path | None = None) -> dict:
         "engines": list(ENGINES),
         "statuses": list(STATUSES),
         "datasets": datasets,
-        "not_supported": NOT_SUPPORTED,
+        "not_supported": [n for n in NOT_SUPPORTED if not (us and n.startswith("stocks outside"))],
+        "us_liquid": _us_liquid(files) if us else None,
         "futures": _futures(files),
+    }
+
+
+def _us_liquid(files: dict) -> dict:
+    """All US common stocks (data.universe = "us_liquid"), when the lake has them."""
+    from concordance.data.us_universe import MIN_PRICE, NYSE_SIZE_PCT
+
+    have = files.get("crsp_daily_us", {})
+    return {
+        "request": 'data.universe = "us_liquid"',
+        "data": {k: have.get(k) for k in ("start", "end", "permnos_out")},
+        "members": f"view.members / view['member']: US common stocks (NYSE, NYSE American, "
+                   f"Nasdaq) that closed >= ${MIN_PRICE:g} with market cap >= the NYSE "
+                   f"{int(NYSE_SIZE_PCT * 100)}th percentile at the previous close",
+        "fields": "view['sp500'] = 1 on S&P 500 member days (exclude them for small and "
+                  "mid caps); every other view field as for sp500",
+        "benchmark": "cap-weighted total return of the members (an equal-weighted one is "
+                     "in the run manifest)",
+        "fundamentals": "data.fundamentals: true reads all US firms' quarterly Compustat",
+        "caveats": ["shorting small stocks is costly and often impossible, but borrow is a "
+                    "flat fee here: prefer long-only designs",
+                    "costs use each stock's quoted spread and square-root impact; small "
+                    "names are expensive to trade, so keep turnover low"],
     }
 
 

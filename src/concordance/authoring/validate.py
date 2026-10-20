@@ -198,6 +198,9 @@ def _child(path: str, params: dict | None, real_window: tuple[str, str] | None) 
                                               halt_rate=halts, missing_open_rate=no_open))
         panel = random_links(panel, seed)  # exercises view.customer_weights()
         panel = random_fundamentals(panel, seed)  # exercises view.fundamental()
+        # us_liquid's S&P flag (a fixed fifth of the assets) so strategies may read it.
+        panel.fields["sp500"] = np.zeros(panel.shape)
+        panel.fields["sp500"][:, : panel.shape[1] // 5] = 1.0
         tag = f"synthetic market {k + 1} ({kind}: {T} sessions x 50 assets)"
         t0 = time.perf_counter()
         try:

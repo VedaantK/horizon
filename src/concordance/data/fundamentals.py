@@ -170,21 +170,23 @@ class Fundamentals:
         return self._cache[key]
 
 
-def load_rows(lake: Path | None = None) -> pd.DataFrame:
-    """Lake fundq -> USD rows with quarterized cash flows, TTM sums, availability and PERMNO."""
+def load_rows(lake: Path | None = None, fundq: str = "comp_fundq.parquet") -> pd.DataFrame:
+    """Lake fundq -> USD rows with quarterized cash flows, TTM sums, availability and PERMNO.
+    `fundq`: comp_fundq.parquet (S&P 500 firms) or comp_fundq_us.parquet (all US firms)."""
     lake = Path(lake or default_lake())
-    fq = pd.read_parquet(lake / "comp_fundq.parquet")
+    fq = pd.read_parquet(lake / fundq)
     if "curcdq" in fq:
         fq = fq[fq["curcdq"].isna() | (fq["curcdq"] == "USD")]
     links = pd.read_parquet(lake / "ccm_link.parquet")
     return link_to_permno(availability(add_ttm(quarterize_ytd(fq))), links)
 
 
-def attach_fundamentals(panel: MarketPanel, lake: Path | None = None) -> MarketPanel:
+def attach_fundamentals(panel: MarketPanel, lake: Path | None = None,
+                        fundq: str = "comp_fundq.parquet") -> MarketPanel:
     """Return a copy of `panel` whose view serves `view.fundamental(name)`."""
     from dataclasses import replace
 
-    rows = load_rows(lake)
+    rows = load_rows(lake, fundq)
     meta = dict(panel.meta)
     meta["fundamentals"] = {"quarters": int(len(rows)),
                             "rdq_imputed_share": round(float(rows["rdq_imputed"].mean()), 4)

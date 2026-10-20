@@ -152,7 +152,12 @@ def cmd_ingest_us(a):
     from concordance.data.us_universe import ingest_us
 
     lake = Path(a.lake) if a.lake else default_lake()
-    print(json.dumps(ingest_us(Path(a.raw_dir), lake), indent=2, default=str))
+    out = ingest_us(Path(a.raw_dir), lake)
+    if a.daily:
+        from concordance.data.us_universe import ingest_daily_us
+
+        out["crsp_daily_us"] = ingest_daily_us(Path(a.raw_dir), lake)
+    print(json.dumps(out, indent=2, default=str))
 
 
 def cmd_build_sp500(a):
@@ -266,6 +271,8 @@ def main(argv=None):
                        help="all-US-stocks exports (small caps) -> *_us lake datasets")
     s.add_argument("raw_dir")
     s.add_argument("--lake", default=None)
+    s.add_argument("--daily", action="store_true",
+                   help="also the CRSP daily file (large; streamed through DuckDB)")
     s.set_defaults(fn=cmd_ingest_us)
 
     s = sub.add_parser("build-sp500",
