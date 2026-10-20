@@ -175,3 +175,61 @@ next to `INDL`; ingest keeps `INDL`.
 - [x] `comp_seg_customer.csv`, `comp_funda.csv` (customer links)
 - [ ] `crsp_names.csv` (optional; better customer-name matching)
 - [ ] `comp_fundq.csv` (optional for now)
+
+---
+
+# Small caps: every US common stock (added 2026-10-20)
+
+Put these in a **new folder `~/wrds_exports/allstocks/`**. Don't mix them with the S&P 500
+files. Same rules as above:
+- Choose compressed output (`.csv.gz` or zip) if the form offers it.
+- **Always type the start date.** Some forms default to 2020.
+- If a query is too large or times out, split that chunk in half and name the pieces so the
+  dates show (`crsp_daily_all_1990_1992.csv.gz`, …).
+
+## Query S1: CRSP daily, all stocks — save as `crsp_daily_all_<years>.csv.gz`
+**Menu:** CRSP → (Version 2 / CIZ) Stock → **Daily Stock File**
+
+| Step | Setting |
+|---|---|
+| Date range | One chunk per query (table below). Type both dates. |
+| Company codes | **Search the entire database** (no upload) |
+| Screens, if the form offers them | Share type **NS** (ordinary common), security type **EQTY**, subtype **COM**, US incorporated **Y**, primary exchange **N / A / Q** (NYSE, NYSE American, Nasdaq). If a screen isn't offered, skip it: ingest applies the same filter. |
+| Variables | Same as Query 2, plus `SecuritySubType` and `USIncFlg`: `PERMNO`, `DlyCalDt`, `Ticker`, `SICCD`, `PrimaryExch`, `ShareType`, `SecurityType`, `SecuritySubType`, `USIncFlg`, `DlyOpen`, `DlyHigh`, `DlyLow`, `DlyClose`, `DlyPrc`, `DlyBid`, `DlyAsk`, `DlyVol`, `DlyRet`, `DlyRetx`, `DlyCap`, `ShrOut`, `DlyDelFlg`, `DlyPrevDt` |
+
+Expect about 1.5–2 million rows a year, roughly 8–10 times the S&P-only files.
+
+| Query | Dates | Save as |
+|---|---|---|
+| S1a | 1990-01-01 → 1994-12-31 | `crsp_daily_all_1990_1994.csv.gz` |
+| S1b | 1995-01-01 → 1999-12-31 | `crsp_daily_all_1995_1999.csv.gz` |
+| S1c | 2000-01-01 → 2004-12-31 | `crsp_daily_all_2000_2004.csv.gz` |
+| S1d | 2005-01-01 → 2009-12-31 | `crsp_daily_all_2005_2009.csv.gz` |
+| S1e | 2010-01-01 → 2014-12-31 | `crsp_daily_all_2010_2014.csv.gz` |
+| S1f | 2015-01-01 → 2019-12-31 | `crsp_daily_all_2015_2019.csv.gz` |
+| S1g | 2020-01-01 → 2025-12-31 | `crsp_daily_all_2020_2025.csv.gz` |
+
+## Query S2: CRSP delistings, all stocks — save as `crsp_delist_all.csv.gz`
+**Menu:** CRSP → Stock (v2) → **Delisting information**
+
+| Step | Setting |
+|---|---|
+| Date range | **Type 1990-01-01** → 2025-12-31 |
+| Company codes | Search the entire database |
+| Variables | all (needed: `PERMNO`, `DelistingDt`, `DelRet`, `DelNextPrc`) |
+
+## Query S3: Compustat quarterly, whole database — save as `comp_fundq_all.csv.gz`
+**Menu:** Compustat → North America → **Fundamentals Quarterly**
+
+Same settings and variables as Query 4, but **search the entire database** instead of
+uploading `gvkeys.txt`. Also add `curcdq`. If it's too large, split it by date:
+1992–2005 and 2006–latest.
+
+## Already have
+`ccm_link` and `crsp_names` cover every stock, and `ff_factors_daily` is market-wide. No new
+export is needed for those.
+
+## Checklist (small caps)
+- [ ] `crsp_daily_all_*.csv.gz` (7 chunks, or more if split)
+- [ ] `crsp_delist_all.csv.gz`
+- [ ] `comp_fundq_all.csv.gz`
