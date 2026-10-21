@@ -40,3 +40,26 @@ The staging output must still pass independent provenance review, historical ide
 review, a versioned backtester adapter and generation admission checks before Value is
 runnable. Public modern company-facts exports or a delayed restated table must not be
 substituted for historical first-reported observations.
+
+## Explicit admitted-data adapter
+
+The research-next checkout includes a separate adapter selected by both
+`data.fundamentals: true` and `data.fundamentals_basis: first_reported`. The default
+remains `restated` for legacy requests. There is no fallback when first-reported data
+or its approval is missing. The API reports which basis and evidence hash it used.
+
+After an independent review of real source evidence, the approved lake must contain
+`first_reported_quarterly.parquet` and `first_reported_admission.json`. The admission
+has exactly these fields: schema_version=1, basis=as_first_reported, data_sha256,
+evidence_sha256, approved_by, cutoff. The evidence hash refers to the reviewed operator
+evidence bundle, which stays outside the researcher boundary. A JSON approval is an
+operator attestation, not a vendor-authenticated signature. Do not approve a synthetic
+test fixture or populate this record merely to unblock research.
+
+The adapter checks the canonical file hash, schema, metadata, timezone-bearing source
+timestamps, fiscal keys, original-report flags, exact next-exchange-session availability
+and cutoff. It derives events as reports arrive, preserves late-quarter TTM updates,
+never backfills them into earlier dates, and returns missing values after staleness.
+Supported fields are atq, seqq, ceqq, pstkq, txditcq, revtq, cogsq and the two TTM flows.
+Other fields and annual reports remain unsupported. The panel cache distinguishes dates
+and asset identities. Capabilities describe this source separately from restated data.

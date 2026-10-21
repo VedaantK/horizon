@@ -54,6 +54,8 @@ def capabilities(lake: str | Path | None = None) -> dict:
                 for name, f in sorted(files.items())}
     order_fields = [f.name for f in fields(Orders)]
     us = files.get("crsp_daily_us", {}).get("status") == "ok"
+    pit = all(files.get(name, {}).get("status") == "ok"
+              for name in ("first_reported_quarterly", "first_reported_admission"))
     return {
         "schema_version": SCHEMA_VERSION,
         "frequency": "daily",
@@ -85,7 +87,18 @@ def capabilities(lake: str | Path | None = None) -> dict:
         "engines": list(ENGINES),
         "statuses": list(STATUSES),
         "datasets": datasets,
-        "not_supported": [n for n in NOT_SUPPORTED if not (us and n.startswith("stocks outside"))],
+        "not_supported": [n for n in NOT_SUPPORTED if not (
+            (us and n.startswith("stocks outside"))
+            or (pit and n.startswith("annual fundamentals")))
+        ] + (["annual fundamentals, earnings-announcement events and analyst data"] if pit else []),
+        "first_reported": {
+            "available": pit,
+            "data_setting": "data.fundamentals=true and data.fundamentals_basis=first_reported",
+            "fields": ["atq", "seqq", "ceqq", "pstkq", "txditcq", "revtq", "cogsq",
+                       "revtq_ttm", "cogsq_ttm"] if pit else [],
+            "limitation": "Operator-reviewed source attestation; source authenticity is not "
+                          "established by a schema or hash alone. No restated fallback.",
+        },
         "us_liquid": _us_liquid(files) if us else None,
         "futures": _futures(files),
     }
@@ -106,7 +119,15 @@ def _us_liquid(files: dict) -> dict:
                   "mid caps); every other view field as for sp500",
         "benchmark": "cap-weighted total return of the members (an equal-weighted one is "
                      "in the run manifest)",
-        "fundamentals": "data.fundamentals: true reads all US firms' quarterly Compustat",
+        "fundamentals": (
+            "Admitted first-reported quarterly fields require data.fundamentals_basis: "
+            "first_reported; no restated fallback. See first_reported.fields."
+            if all(files.get(name, {}).get("status") == "ok" for name in (
+                "first_reported_quarterly", "first_reported_admission")) else
+            "data.fundamentals: true reads restated quarterly Compustat; exploratory only"
+            if files.get("comp_fundq_us", {}).get("status") == "ok" else
+            "Quarterly fundamentals are not available in this lake"
+        ),
         "caveats": ["shorting small stocks is costly and often impossible, but borrow is a "
                     "flat fee here: prefer long-only designs",
                     "costs use each stock's quoted spread and square-root impact; small "

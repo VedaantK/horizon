@@ -44,7 +44,7 @@ DEFAULTS: dict = {
     "run_id": None,
     "strategy": {"path": None, "params": {}},
     "data": {"universe": "sp500", "start": None, "end": None, "lake": None,
-             "customer_links": False, "fundamentals": False},
+             "customer_links": False, "fundamentals": False, "fundamentals_basis": "restated"},
     "initial_capital": 1_000_000.0,
     "engines": list(ENGINES),
     "costs": {"commission_bps": 1.0, "default_half_spread_bps": 5.0,
@@ -166,6 +166,8 @@ def resolve_request(request: dict) -> dict:
     for flag in ("customer_links", "fundamentals"):
         if not isinstance(req["data"][flag], bool):
             raise RequestError(f"data.{flag} must be true or false")
+    if req["data"]["fundamentals_basis"] not in ("restated", "first_reported"):
+        raise RequestError("data.fundamentals_basis must be restated or first_reported")
     if pd.Timestamp(req["data"]["start"]) >= pd.Timestamp(req["data"]["end"]):
         raise RequestError("data.start must be before data.end")
     bad = set(req["engines"]) - set(ENGINES)
@@ -363,19 +365,39 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
     if req["data"]["universe"] == "futures":
         return _load_futures(req, strategy, lake)
     us = req["data"]["universe"] == "us_liquid"
+    # A short-lookback signal still needs prior observations for ADV/impact sizing.
+    # Without this, an otherwise valid first rebalance can be silently untradeable.
+    liquidity = req.get("liquidity", DEFAULTS["liquidity"])
+    execution_history = int(liquidity["window"]) + 1 if liquidity else 0
+    available_execution_history = execution_history
+    lm = lake / "manifest.json"
+    if lm.exists():
+        files = json.loads(lm.read_text()).get("files", {})
+        first = files.get("crsp_daily_us" if us else "crsp_daily", {}).get("start")
+        if first:
+            from concordance.data.crsp import xnys_sessions
+
+            first, start = pd.Timestamp(first), pd.Timestamp(req["data"]["start"])
+            available_execution_history = (len(xnys_sessions(first, start - pd.Timedelta(days=1)))
+                                           if first < start else 0)
+    # Never invent unavailable volume history or weaken a strategy's own requirement.
+    warmup = max(strategy.warmup(), min(execution_history, available_execution_history))
     if us:
         from concordance.data.us_universe import load_us_panel
 
         panel = load_us_panel(req["data"]["start"], req["data"]["end"], lake=lake,
-                              warmup_sessions=strategy.warmup(),
+                              warmup_sessions=warmup,
                               unlock_reason=req["lockbox"]["unlock_reason"])
     else:
         panel = load_sp500_panel(req["data"]["start"], req["data"]["end"], lake=lake,
-                                 warmup_sessions=strategy.warmup(),
+                                 warmup_sessions=warmup,
                                  unlock_reason=req["lockbox"]["unlock_reason"])
     lm = lake / "manifest.json"
     data = {"lake": str(lake), "universe": req["data"]["universe"],
             "lake_manifest_sha256": _sha256_file(lm) if lm.exists() else None}
+    if warmup < execution_history:
+        data["partial_execution_history"] = {"requested": execution_history, "loaded": warmup,
+                                             "behavior": "existing insufficient-ADV rules apply"}
     if us:
         data["universe_rule"] = panel.meta["universe_rule"]
         data["members_per_day"] = round(panel.meta["members_per_day"], 1)
@@ -386,12 +408,19 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
         data["customer_links"] = {**panel.meta["customer_links"],
                                   "sha256": _sha256_file(lake / "customer_links.parquet")}
     if req["data"]["fundamentals"]:
+        if req["data"]["fundamentals_basis"] == "first_reported":
+            from concordance.data.first_reported_panel import ADMISSION, FILE, attach
+
+            panel = attach(panel, lake)
+            data["fundamentals"] = {**panel.meta["fundamentals"], "file": FILE,
+                                    "admission_sha256": _sha256_file(lake / ADMISSION)}
+            return panel, lake, data
         from concordance.data.fundamentals import attach_fundamentals
 
         fundq = "comp_fundq_us.parquet" if us else "comp_fundq.parquet"
         panel = attach_fundamentals(panel, lake, fundq)
         data["fundamentals"] = {**panel.meta["fundamentals"], "file": fundq,
-                                "sha256": _sha256_file(lake / fundq)}
+                                "sha256": _sha256_file(lake / fundq), "basis": "restated"}
     return panel, lake, data
 
 

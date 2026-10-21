@@ -40,6 +40,7 @@ def normalize(frame: pd.DataFrame, provenance: dict, source_sha256: str,
     require(set(KEYS + VALUES) == set(frame.columns), "canonical export columns do not match")
     require(not frame.empty, "empty first-reported export")
     rows = frame.copy()
+    rows.attrs = {}  # Vendor dataframe attributes are not approved research metadata.
     require(rows["is_original"].map(lambda v: isinstance(v, (bool, np.bool_)) and v).all(),
             "only explicitly original reports are supported; restated rows are rejected")
     require(rows["currency"].eq("USD").all() and rows["units"].eq("USD_millions").all(),
@@ -82,6 +83,10 @@ def normalize(frame: pd.DataFrame, provenance: dict, source_sha256: str,
             "conflicting original reports for the same asset and quarter")
     require(not rows.duplicated(["permno", "fyearq", "fqtr"]).any(),
             "ambiguous fiscal calendar; normalize the source explicitly")
+    for _, group in rows.groupby("permno"):
+        ordered = group.sort_values("datadate")
+        ordinal = ordered["fyearq"] * 4 + ordered["fqtr"]
+        require((ordinal.diff().dropna() > 0).all(), "fiscal quarter order conflicts with dates")
     return rows.sort_values(["permno", "available_at", "datadate"]).reset_index(drop=True)
 
 
@@ -128,7 +133,11 @@ def import_export(source, review, destination, cutoff="2019-12-31"):
     rows = normalize(frame, evidence, raw_hash, cutoff)
     destination.mkdir(parents=True, mode=0o700)
     path = destination / "first_reported_quarterly.parquet"
-    rows.to_parquet(path, index=False)
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pa.Table.from_pandas(rows, preserve_index=False).replace_schema_metadata(None)
+    pq.write_table(table, path, compression="zstd")
     manifest = {"status": "validated_export_not_admitted_to_research", "cutoff": cutoff,
                 "basis": "as_first_reported", "retained_rows": len(rows),
                 "available_start": str(rows["available_at"].min().date()),
