@@ -33,6 +33,7 @@ class CostModel:
     # Rebalancing trades worth less than this share of portfolio value (bps) are skipped:
     # the position stays as it is. Full exits and forced exits always trade. 0 = off.
     min_trade_bps: float = 0.0
+    spread_multiplier: float = 1.0
 
     def borrow_rate(self) -> float:
         """Borrow fee per session, as a rate on short market value."""
@@ -50,6 +51,7 @@ class CostModel:
             prior[1:] = np.where(ok[:-1], quoted[:-1], np.nan)
             half = np.where(np.isfinite(prior), prior, half)
         half = np.minimum(half, self.max_half_spread_bps / 1e4)
+        half = half * self.spread_multiplier
         rate = self.commission_bps / 1e4 + half
         return np.where(panel.liquidate, 0.0, rate)
 

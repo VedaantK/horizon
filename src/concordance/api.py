@@ -48,7 +48,8 @@ DEFAULTS: dict = {
     "initial_capital": 1_000_000.0,
     "engines": list(ENGINES),
     "costs": {"commission_bps": 1.0, "default_half_spread_bps": 5.0,
-              "use_prior_quoted_spread": True, "borrow_bps": 50.0, "min_trade_bps": 0.0},
+              "use_prior_quoted_spread": True, "borrow_bps": 50.0, "min_trade_bps": 0.0,
+              "spread_multiplier": 1.0},
     "liquidity": {"participation": 0.10, "impact_coef": 1.0, "max_impact_bps": 500.0,
                   "window": 20, "min_obs": 10},
     "validation": {"program": "default", "placebo": 0, "lookahead_cuts": 3},
@@ -178,7 +179,8 @@ def resolve_request(request: dict) -> dict:
             raise RequestError("liquidity.participation must be in (0, 1]")
         if q["min_obs"] > q["window"] or q["window"] < 1:
             raise RequestError("liquidity: need 1 <= min_obs <= window")
-    for k in ("commission_bps", "default_half_spread_bps", "borrow_bps", "min_trade_bps"):
+    for k in ("commission_bps", "default_half_spread_bps", "borrow_bps", "min_trade_bps",
+              "spread_multiplier"):
         v = req["costs"][k]
         if isinstance(v, bool) or not isinstance(v, int | float) or not v >= 0:
             raise RequestError(f"costs.{k} must be a number >= 0")
@@ -425,7 +427,8 @@ def request_tables(req: dict, panel: MarketPanel):
     costs = CostModel(commission_bps=c["commission_bps"],
                       default_half_spread_bps=c["default_half_spread_bps"],
                       use_prior_quoted_spread=c["use_prior_quoted_spread"],
-                      borrow_bps=c["borrow_bps"], min_trade_bps=c["min_trade_bps"])
+                      borrow_bps=c["borrow_bps"], min_trade_bps=c["min_trade_bps"],
+                      spread_multiplier=c["spread_multiplier"])
     liquidity = LiquidityModel(**q) if q is not None else None
     return exec_tables(panel, costs, liquidity)
 
@@ -623,7 +626,8 @@ def _crash_protection(rets, lake, costs, bench, diag):
     run itself is complete without it."""
     from concordance.overlay import crash_protection
 
-    cost = costs["commission_bps"] + costs["default_half_spread_bps"]
+    cost = (costs["commission_bps"]
+            + costs["default_half_spread_bps"] * costs["spread_multiplier"])
     try:
         return crash_protection(rets, lake, cost, benchmark=None if bench is None
                                 else pd.Series(bench))
