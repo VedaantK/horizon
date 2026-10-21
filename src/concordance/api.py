@@ -580,7 +580,13 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
     ledger = TrialLedger(root=lake / "ledger", program=v["program"])
     params = getattr(strategy, "params", req["strategy"]["params"])
     trial = ledger.record(getattr(strategy, "name", type(strategy).__name__), params, rets,
-                          note=f"run {req['run_id']}")
+                          note=f"run {req['run_id']}", context={
+                              "source": _sha256_file(Path(req["strategy"]["path"])),
+                              "data": req["data"], "costs": req.get("costs"),
+                              "futures": req.get("futures"),
+                              "capital": req["initial_capital"],
+                              "data_manifest": _sha256_file(lake / "manifest.json")
+                              if (lake / "manifest.json").exists() else None})
     n_eff = max(ledger.n_effective(), 1.0)
     m["dsr"] = deflated_sharpe(rets.to_numpy(), n_trials=n_eff).annualized()
     m["trials_recorded"] = ledger.n_trials()
@@ -673,7 +679,13 @@ def _evaluate_futures(req, panel, strategy, sched, out, lake, log, diag) -> dict
     ledger = TrialLedger(root=lake / "ledger", program=req["validation"]["program"])
     params = getattr(strategy, "params", req["strategy"]["params"])
     trial = ledger.record(getattr(strategy, "name", type(strategy).__name__), params, rets,
-                          note=f"run {req['run_id']}")
+                          note=f"run {req['run_id']}", context={
+                              "source": _sha256_file(Path(req["strategy"]["path"])),
+                              "data": req["data"], "costs": req.get("costs"),
+                              "futures": req.get("futures"),
+                              "capital": req["initial_capital"],
+                              "data_manifest": _sha256_file(lake / "manifest.json")
+                              if (lake / "manifest.json").exists() else None})
     n_eff = max(ledger.n_effective(), 1.0)
     m["dsr"] = deflated_sharpe(rets.to_numpy(), n_trials=n_eff).annualized()
     m["trials_recorded"] = ledger.n_trials()
