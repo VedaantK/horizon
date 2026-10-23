@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from concordance.memory import STORE, allocate, blocks, stored
+
 PRICE_DECIMALS = 9
 QTY_DECIMALS = 6
 
@@ -89,7 +91,7 @@ def build_panel(long: pd.DataFrame, sessions: pd.DatetimeIndex | None = None,
     def dense(col: str, fill=np.nan, dtype=float) -> np.ndarray:
         wide = df.pivot(index="date", columns="asset", values=col)
         wide = wide.reindex(index=sessions, columns=assets)
-        return wide.to_numpy(dtype=dtype, na_value=fill)
+        return stored(wide.to_numpy(dtype=dtype, na_value=fill))
 
     open_ = dense("open")
     close = dense("close")
@@ -100,7 +102,7 @@ def build_panel(long: pd.DataFrame, sessions: pd.DatetimeIndex | None = None,
             fields[c] = dense(c)
 
     if member_col and member_col in df.columns:
-        member = dense(member_col, fill=0.0).astype(bool)
+        member = stored(dense(member_col, fill=0.0).astype(bool))
     else:
         member = np.isfinite(close)
 
@@ -147,6 +149,18 @@ def _validate(sessions, assets, open_, close, ret) -> None:
 
 def derive_prices(open_: np.ndarray, close: np.ndarray, ret: np.ndarray):
     """Causal total-return prices plus execution/valuation arrays (see SEMANTICS.md)."""
+    if STORE.get() is not None:
+        outputs = [allocate(close.shape, dtype, order="F")
+                   for dtype in (float, float, bool, float)]
+        for cols in blocks(close.shape[1]):
+            values = _derive_prices(open_[:, cols], close[:, cols], ret[:, cols])
+            for out, value in zip(outputs, values, strict=True):
+                out[:, cols] = value
+        return tuple(stored(out) for out in outputs)
+    return _derive_prices(open_, close, ret)
+
+
+def _derive_prices(open_: np.ndarray, close: np.ndarray, ret: np.ndarray):
     T, N = close.shape
     has = np.isfinite(close)
     any_obs = has.any(0)

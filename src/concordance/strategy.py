@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from concordance.memory import STORE, allocate, blocks, stored
 from concordance.panel import PRICE_DECIMALS, MarketPanel
 
 # exit_kind codes (Schedule.exit_kind, PositionState.exit_today)
@@ -81,7 +82,10 @@ class PointInTimeView:
         "atq" (total assets), "revtq_ttm" (revenue, last four quarters). A quarter is visible
         from the first session after its report date (rdq; quarter end + 90 days if missing),
         until a newer quarter is reported or it is 275 days old. NaN where unknown. Values
-        in $ millions. Needs `data.fundamentals: true`."""
+        in $ millions. With `data.fundamentals_basis: annual_lagged`, names are
+        `at`, `ceq`, `revt`, `cogs`; prior-calendar-year annual values become usable
+        at the last June close and expire at the next formation. These values may
+        contain later revisions. Needs `data.fundamentals: true`."""
         if self._panel.fundamentals is None:
             raise LookaheadError("fundamentals are not loaded for this run: set "
                                  "data.fundamentals to true in the request")
@@ -230,6 +234,21 @@ def intraday_range(panel: MarketPanel) -> tuple[np.ndarray, np.ndarray, np.ndarr
     of open, low, high and close, so it always contains the open and the close even when a
     vendor high/low disagrees with them (5 rows in the 1990-2025 CRSP data).
     """
+    if STORE.get() is not None:
+        from dataclasses import replace
+
+        output = [allocate(panel.shape, order="F") for _ in range(3)]
+        for cols in blocks(panel.shape[1]):
+            p = replace(panel, fields={k: v[:, cols] for k, v in panel.fields.items()},
+                        tr_close=panel.tr_close[:, cols], exec_price=panel.exec_price[:, cols],
+                        liquidate=panel.liquidate[:, cols])
+            for out, value in zip(output, _intraday_range(p), strict=True):
+                out[:, cols] = value
+        return tuple(stored(out) for out in output)
+    return _intraday_range(panel)
+
+
+def _intraday_range(panel):
     tradable = np.isfinite(panel.exec_price) & ~panel.liquidate
     tr_open = np.where(tradable, panel.exec_price, np.nan)
     close = panel.fields["close"]
@@ -272,10 +291,11 @@ class Schedule:
     @classmethod
     def from_weights(cls, weights: np.ndarray, has: np.ndarray) -> Schedule:
         T, N = weights.shape
-        nan = np.full((T, N), np.nan)
-        return cls(weights, has, np.zeros((T, N), bool), np.zeros((T, N), bool), nan,
-                   nan.copy(), nan.copy(), nan.copy(), np.zeros((T, N), np.int8),
-                   np.zeros((T, N), bool))
+        return cls(weights, has, allocate((T, N), bool, False),
+                   allocate((T, N), bool, False), allocate((T, N), fill=np.nan),
+                   allocate((T, N), fill=np.nan), allocate((T, N), fill=np.nan),
+                   allocate((T, N), fill=np.nan), allocate((T, N), np.int8, 0),
+                   allocate((T, N), bool, False))
 
     @property
     def uses_orders(self) -> bool:
@@ -297,10 +317,14 @@ def build_schedule(strategy: Strategy, panel: MarketPanel) -> Schedule:
     """
     T, N = panel.shape
     tr_open, low, high = intraday_range(panel)
+    ratio = allocate((T, N), order="F")
     with np.errstate(invalid="ignore", divide="ignore"):
-        ratio = pd.DataFrame(panel.tr_close / panel.fields["close"]).ffill().to_numpy()
+        for cols in blocks(N):
+            ratio[:, cols] = pd.DataFrame(
+                panel.tr_close[:, cols] / panel.fields["close"][:, cols]).ffill().to_numpy()
+    ratio = stored(ratio)
 
-    s = Schedule.from_weights(np.zeros((T, N)), np.zeros(T, dtype=bool))
+    s = Schedule.from_weights(allocate((T, N), fill=0), np.zeros(T, dtype=bool))
     notes = {"stops_at_or_above_close": 0, "take_profits_at_or_below_close": 0}
     held = np.zeros(N, bool)
     entry_tr = np.full(N, np.nan)

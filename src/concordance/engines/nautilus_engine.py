@@ -31,7 +31,7 @@ from nautilus_trader.accounting.factory import AccountFactory
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.backtest.modules import SimulationModule, SimulationModuleConfig
-from nautilus_trader.config import LoggingConfig, RiskEngineConfig
+from nautilus_trader.config import CacheConfig, LoggingConfig, RiskEngineConfig
 from nautilus_trader.model.data import Bar, BarSpecification, BarType
 from nautilus_trader.model.enums import (
     AccountType,
@@ -50,6 +50,7 @@ from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.trading.strategy import Strategy as NautilusStrategy
 
 from concordance.costs import ExecTables
+from concordance.memory import STORE, allocate
 from concordance.panel import PRICE_DECIMALS, QTY_DECIMALS, MarketPanel
 from concordance.planner import plan_session
 from concordance.result import FILL_COLUMNS, AccountWipedOut, BacktestResult
@@ -144,7 +145,8 @@ class _Executor(NautilusStrategy):
 
     def on_start(self):
         for bt in self.ctx["bar_types"]:
-            self.subscribe_bars(bt)
+            if bt is not None:
+                self.subscribe_bars(bt)
 
     def on_bar(self, bar: Bar):
         ts = bar.ts_event
@@ -164,7 +166,7 @@ class _Executor(NautilusStrategy):
 
     def _positions(self) -> np.ndarray:
         pos = np.zeros(self.ctx["N"])
-        for j, inst in enumerate(self.ctx["instruments"]):
+        for j, inst in self.ctx["instrument_pairs"]:
             pos[j] = float(self.portfolio.net_position(inst.id))
         return pos
 
@@ -296,9 +298,20 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
         init_cash: float) -> BacktestResult:
     T, N = panel.shape
     ccy = _currency()
-    instruments = [_instrument(j, ccy) for j in range(N)]
+    registered = np.ones(N, dtype=bool)
+    if STORE.get() is not None:
+        registered = (sched.weights != 0).any(axis=0) | sched.hold.any(axis=0)
+        for arr in (sched.stop, sched.take_profit, sched.entry_limit, sched.exit_price):
+            registered |= np.isfinite(arr).any(axis=0)
+        # A cash-only day still needs a close event to record its account value.
+        for i in range(T):
+            js = np.flatnonzero(np.isfinite(panel.tr_close[i]))
+            if len(js):
+                registered[js[0]] = True
+    instruments = [_instrument(j, ccy) if registered[j] else None for j in range(N)]
     bar_types = [BarType(inst.id, BarSpecification(1, BarAggregation.DAY, PriceType.LAST),
-                         AggregationSource.EXTERNAL) for inst in instruments]
+                         AggregationSource.EXTERNAL) if inst is not None else None
+                 for inst in instruments]
 
     from concordance.strategy import intraday_range
 
@@ -309,48 +322,73 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
     def px(x):
         return Price(float(x), PRICE_DECIMALS)
 
-    ts_kind, expected, bars = {}, {}, []
+    ts_kind, expected = {}, {}
+    for i, day in enumerate(panel.sessions):
+        for offset, kind in [(OPEN_OFFSET, "open"), (CLOSE_OFFSET, "close"),
+                             *[(off, "range") for off in RANGE_OFFSETS]]:
+            ts_kind[(day + offset).tz_localize("UTC").value] = (kind, i)
 
-    def flat_bars(t, row):
-        js = np.flatnonzero(np.isfinite(row))
+    def flat_bars(t, row, bars, feed):
+        js = np.flatnonzero(np.isfinite(row) & feed)
+        if not len(js):
+            js = np.flatnonzero(np.isfinite(row) & registered)[:1]
         expected[t] = len(js)
         for j in js:
             p = px(row[j])
             bars.append(Bar(bar_types[j], p, p, p, p, BAR_VOLUME, t, t))
 
-    for i, day in enumerate(panel.sessions):
-        t_open = (day + OPEN_OFFSET).tz_localize("UTC").value
-        t_a, t_b = ((day + off).tz_localize("UTC").value for off in RANGE_OFFSETS)
-        t_close = (day + CLOSE_OFFSET).tz_localize("UTC").value
-        ts_kind[t_open] = ("open", i)
-        ts_kind[t_a] = ("range", i)
-        ts_kind[t_b] = ("range", i)
-        ts_kind[t_close] = ("close", i)
-        flat_bars(t_open, panel.exec_price[i])
-        js = np.flatnonzero(resting[i])
-        expected[t_a] = expected[t_b] = len(js)
-        path = [(px(tr_open[i, j]), px(low[i, j]), px(high[i, j]), px(panel.tr_close[i, j]))
-                for j in js]
-        for j, (o, lo, _, _) in zip(js, path, strict=True):
-            bars.append(Bar(bar_types[j], o, o, lo, lo, BAR_VOLUME, t_a, t_a))
-        for j, (_, lo, hi, cl) in zip(js, path, strict=True):
-            bars.append(Bar(bar_types[j], lo, hi, lo, cl, BAR_VOLUME, t_b, t_b))
-        flat_bars(t_close, panel.tr_close[i])
+    def bar_batches():
+        bars = []
+        width = STORE.get().bar_sessions if STORE.get() is not None else T
+        for i, day in enumerate(panel.sessions):
+            if i % width == 0:
+                feed = registered.copy()
+                if STORE.get() is not None:
+                    block = slice(i, min(i + width, T))
+                    feed = (sched.weights[block] != 0).any(axis=0)
+                    feed |= ctx["pending"] != 0
+                    if i:
+                        feed |= ctx["positions"][i - 1] != 0
+                    feed |= resting[block].any(axis=0)
+            t_open = (day + OPEN_OFFSET).tz_localize("UTC").value
+            t_a, t_b = ((day + off).tz_localize("UTC").value for off in RANGE_OFFSETS)
+            t_close = (day + CLOSE_OFFSET).tz_localize("UTC").value
+            ts_kind[t_open] = ("open", i)
+            ts_kind[t_a] = ("range", i)
+            ts_kind[t_b] = ("range", i)
+            ts_kind[t_close] = ("close", i)
+            flat_bars(t_open, panel.exec_price[i], bars, feed)
+            js = np.flatnonzero(resting[i])
+            expected[t_a] = expected[t_b] = len(js)
+            path = [(px(tr_open[i, j]), px(low[i, j]), px(high[i, j]), px(panel.tr_close[i, j]))
+                    for j in js]
+            for j, (o, lo, _, _) in zip(js, path, strict=True):
+                bars.append(Bar(bar_types[j], o, o, lo, lo, BAR_VOLUME, t_a, t_a))
+            for j, (_, lo, hi, cl) in zip(js, path, strict=True):
+                bars.append(Bar(bar_types[j], lo, hi, lo, cl, BAR_VOLUME, t_b, t_b))
+            flat_bars(t_close, panel.tr_close[i], bars, feed)
+            if (i + 1) % width == 0:
+                yield bars
+                bars = []
+        if bars:
+            yield bars
 
     ctx = {
         "N": N, "ccy": ccy, "instruments": instruments, "bar_types": bar_types,
-        "inst_to_asset": {inst.id: j for j, inst in enumerate(instruments)},
+        "instrument_pairs": [(j, inst) for j, inst in enumerate(instruments) if inst is not None],
+        "inst_to_asset": {inst.id: j for j, inst in enumerate(instruments) if inst is not None},
         "ts_kind": ts_kind, "expected": expected,
         "sched": sched, "tables": tables, "pending": np.zeros(N),
         "liquidate": panel.liquidate, "scaled": [],
         "equity": np.full(T, np.nan), "cash": np.full(T, np.nan),
-        "positions": np.zeros((T, N)), "recorded": np.zeros(T, dtype=bool),
+        "positions": allocate((T, N), fill=0), "recorded": np.zeros(T, dtype=bool),
         "borrow": np.zeros(T), "venue": _VenueHandle(), "wiped_out": False,
     }
 
     engine = BacktestEngine(BacktestEngineConfig(
         trader_id=TraderId("CONCORDANCE-001"),
         logging=LoggingConfig(bypass_logging=True),
+        cache=CacheConfig(bar_capacity=1) if STORE.get() is not None else CacheConfig(),
         risk_engine=RiskEngineConfig(max_order_submit_rate="1000000/00:00:01"),
     ))
     fee_model = _TableFee(tables, panel.liquidate, {t: i for t, (_, i) in ts_kind.items()},
@@ -365,12 +403,19 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
                      # little below 0; the shared planner still never lets a buy overdraw
                      allow_cash_borrowing=True)
     for inst in instruments:
-        engine.add_instrument(inst)
-    engine.add_data(bars)
+        if inst is not None:
+            engine.add_instrument(inst)
     strat = _Executor(ctx)
     engine.add_strategy(strat)
     try:
-        engine.run()
+        streaming = STORE.get() is not None
+        for batch in bar_batches():
+            engine.add_data(batch)
+            engine.run(streaming=streaming)
+            if streaming:
+                engine.clear_data()
+        if streaming:
+            engine.end()
     finally:
         engine.dispose()
         AccountFactory.deregister_cash_borrowing(VENUE.value)

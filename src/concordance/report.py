@@ -84,22 +84,43 @@ def leg_attribution(res: BacktestResult, marks: np.ndarray, start: int = 0) -> d
     stock borrow, which add up exactly to the change in equity; plus average gross and net
     exposure as fractions of equity. A day's P&L on an asset belongs to the side it was
     held on at the previous close (or, if flat then, at this close)."""
+    from concordance.memory import STORE, allocate
+
     T, N = res.positions.shape
     pos = res.positions
-    held = np.where(pos != 0, pos * np.nan_to_num(marks), 0.0)
-    trade = np.zeros((T, N))
+    held = allocate((T, N))
+    for lo in range(0, T, 128):
+        sl = slice(lo, lo + 128)
+        held[sl] = np.where(pos[sl] != 0, pos[sl] * np.nan_to_num(marks[sl]), 0.0)
+    trade = allocate((T, N), fill=0)
     f = res.fills
     np.add.at(trade, (f["session"].to_numpy(), f["asset"].to_numpy()),
               (f["qty"] * f["price"]).to_numpy())
-    pnl = np.diff(held, axis=0, prepend=np.zeros((1, N))) - trade
-    prev = np.vstack([np.zeros((1, N)), pos[:-1]])
-    side = np.where(prev != 0, np.sign(prev), np.sign(pos))
+    if STORE.get() is None:
+        pnl = np.diff(held, axis=0, prepend=np.zeros((1, N))) - trade
+        prev = np.vstack([np.zeros((1, N)), pos[:-1]])
+        side = np.where(prev != 0, np.sign(prev), np.sign(pos))
+    else:
+        pnl = allocate((T, N))
+        side = allocate((T, N), np.int8)
+        for lo in range(0, T, 128):
+            hi = min(lo + 128, T)
+            prior_held = np.vstack([np.zeros((1, N)), held[:hi-1]]) if lo == 0 else held[
+                lo-1:hi-1]
+            prior_pos = np.vstack([np.zeros((1, N)), pos[:hi-1]]) if lo == 0 else pos[
+                lo-1:hi-1]
+            pnl[lo:hi] = held[lo:hi] - prior_held - trade[lo:hi]
+            side[lo:hi] = np.where(prior_pos != 0, np.sign(prior_pos), np.sign(pos[lo:hi]))
     rows = slice(start + 1, None)  # P&L earned after the start close
     fees = f.loc[f["session"] > start, "fee"].sum()
     borrow = res.borrow[rows].sum() if res.borrow is not None else 0.0
     eq = res.equity[start:]
-    long_v = np.where(pos > 0, held, 0.0).sum(axis=1)[start:]
-    short_v = -np.where(pos < 0, held, 0.0).sum(axis=1)[start:]
+    long_v, short_v = np.empty(T), np.empty(T)
+    for lo in range(0, T, 128):
+        sl = slice(lo, lo + 128)
+        long_v[sl] = np.where(pos[sl] > 0, held[sl], 0.0).sum(axis=1)
+        short_v[sl] = -np.where(pos[sl] < 0, held[sl], 0.0).sum(axis=1)
+    long_v, short_v = long_v[start:], short_v[start:]
     return {
         "long_pnl": float(pnl[rows][side[rows] > 0].sum()),
         "short_pnl": float(pnl[rows][side[rows] < 0].sum()),

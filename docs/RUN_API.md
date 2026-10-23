@@ -43,6 +43,11 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
 - `data.fundamentals: true` loads `lake/comp_fundq.parquet` (with `lake/ccm_link.parquet`)
   so the strategy can call `view.fundamental(name)`. The manifest records the file's SHA-256,
   the quarter count and the share of quarters whose report date was imputed.
+- For lagged annual research, set `data.fundamentals_basis: "annual_lagged"` and
+  `data.annual_source` to a separately prepared source directory. The view exposes `at`,
+  `ceq`, `revt`, `cogs` under the June formation convention. This basis may contain later
+  revisions and cannot be substituted for first-reported inputs. See
+  [Annual Value](ANNUAL_VALUE.md) for preparation, strategy rules and resource limits.
 - `data.universe`:
   - `sp500`: S&P 500 members as of each date.
   - `us_liquid`: all US common stocks on NYSE, NYSE American and Nasdaq.
@@ -60,6 +65,10 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
   automatically. `data.end` past the lockbox date (`CONCORDANCE_LOCKBOX`) is refused unless
   `lockbox.unlock_reason` is given, and that read is logged.
 - `liquidity: null` turns off the volume cap and market impact.
+- `memory.mode: "disk"` enables a batched all-US panel, disk-backed large arrays and
+  streaming Nautilus bars. `memory.asset_batch_size` defaults to 256 and
+  `memory.bar_batch_sessions` to 20. The portfolio is continuous across batches; the
+  default `"ram"` mode preserves the original loading path. See [Memory](MEMORY.md).
 - `costs.borrow_bps` is the flat annual stock-borrow fee on short positions.
   `costs.min_trade_bps` skips rebalancing trades worth less than that share of portfolio
   value (full exits always trade); 0, the default, trades every change. See

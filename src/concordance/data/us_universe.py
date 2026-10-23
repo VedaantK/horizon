@@ -226,7 +226,7 @@ def tradable_rows(lake: Path, lo, hi, min_price=MIN_PRICE, size_pct=NYSE_SIZE_PC
 def load_us_panel(start, end, lake: Path | None = None, warmup_sessions: int = 0,
                   min_price: float = MIN_PRICE, size_pct: float = NYSE_SIZE_PCT,
                   min_coverage: float = 0.85, min_year_coverage: float = 0.75,
-                  unlock_reason: str | None = None):
+                  unlock_reason: str | None = None, _ids=None, _tradability_path=None):
     """All US common stocks that were universe members at some point in [start, end], with
     their other days too (so they can be sold, and delisting returns are kept).
 
@@ -265,10 +265,18 @@ def load_us_panel(start, end, lake: Path | None = None, warmup_sessions: int = 0
         sessions = before[-warmup_sessions:].append(in_range)
     lo, hi = sessions[0], sessions[-1]
     # One extra week before `lo` so the first session has a previous close to judge.
-    tr = tradable_rows(lake, lo - pd.Timedelta(days=10), hi, min_price, size_pct)
-    tr["member"] = tr.groupby("permno")["tradable"].shift(fill_value=False).astype(bool)
+    if _tradability_path is None:
+        tr = tradable_rows(lake, lo - pd.Timedelta(days=10), hi, min_price, size_pct)
+        tr["member"] = tr.groupby("permno")["tradable"].shift(fill_value=False).astype(bool)
+    else:
+        with duckdb.connect() as db:
+            db.register("batch_ids", pd.DataFrame({"permno": _ids}))
+            tr = db.execute("SELECT t.* FROM read_parquet(?) t JOIN batch_ids USING (permno) "
+                            "ORDER BY permno,date", [str(_tradability_path)]).df()
     tr = tr[tr["date"] >= lo]
     ids = sorted(tr.loc[tr["member"] & (tr["date"] >= in_range[0]), "permno"].unique())
+    if _ids is not None:
+        ids = sorted(set(ids) & set(_ids))
     if not ids:
         raise CoverageError("no stock passes the universe rule in this window")
 
@@ -323,8 +331,10 @@ def load_us_panel(start, end, lake: Path | None = None, warmup_sessions: int = 0
 
     sp500_flag = long.pivot(index="date", columns="asset", values="sp500")
     panel = build_panel(long.drop(columns=["permno", "sp500"]), sessions=sessions)
-    panel.fields["sp500"] = sp500_flag.reindex(index=sessions, columns=panel.assets).fillna(
-        False).to_numpy(float)
+    from concordance.memory import stored
+
+    panel.fields["sp500"] = stored(sp500_flag.reindex(
+        index=sessions, columns=panel.assets).fillna(False).to_numpy(float))
     gaps = relist[(relist["date"] > sessions[0]) & (relist["date"] <= sessions[-1])]
     panel.meta.update({
         "source": "crsp_us", "universe": "us_liquid",
@@ -337,4 +347,11 @@ def load_us_panel(start, end, lake: Path | None = None, warmup_sessions: int = 0
         "benchmark": bench, "benchmark_ew": bench_ew,
         "members_per_day": float(panel.member[len(sessions) - len(in_range):].sum(1).mean()),
     })
+    if _tradability_path is not None:
+        panel.meta["_cap_denominator"] = g["cap"].reindex(sessions).fillna(0)
+        panel.meta["_ew_count"] = long.loc[ok].groupby("date")["ret"].count().reindex(
+            sessions).fillna(0)
+        panel.meta["_coverage"] = mem["close"].notna().groupby(mem["date"].dt.year).agg(
+            ["sum", "count"])
+        panel.meta["_orphan_opens"] = int(orphan_open.sum())
     return panel

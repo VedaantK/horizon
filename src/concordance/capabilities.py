@@ -27,7 +27,8 @@ NOT_SUPPORTED = [
     "stop-loss, take-profit or limit orders on short positions",
     "per-stock borrow fees, locate limits or short-sale bans (borrow is a flat fee)",
     "maintenance-margin calls",
-    "annual fundamentals, as-first-reported (unrestated) figures, earnings-announcement "
+    "annual fundamentals without an explicit prepared annual_lagged source; "
+    "as-first-reported (unrestated) figures, earnings-announcement "
     "events or analyst data in the strategy view (quarterly Compustat values are restated)",
     "options, ETFs, cash bonds or spot currencies (futures: only the markets listed under "
     "`futures`)",
@@ -84,13 +85,27 @@ def capabilities(lake: str | Path | None = None) -> dict:
                    "long_only": [f for f in LONG_ONLY_ORDERS if f in order_fields]},
         "costs": DEFAULTS["costs"],
         "liquidity": DEFAULTS["liquidity"],
+        "memory": {"defaults": DEFAULTS["memory"], "disk_universes": ["us_liquid"],
+                   "description": "Disk-backed arrays, bounded asset loading and continuous "
+                                  "streamed Nautilus execution; portfolio state is preserved."},
         "engines": list(ENGINES),
         "statuses": list(STATUSES),
         "datasets": datasets,
         "not_supported": [n for n in NOT_SUPPORTED if not (
             (us and n.startswith("stocks outside"))
             or (pit and n.startswith("annual fundamentals")))
-        ] + (["annual fundamentals, earnings-announcement events and analyst data"] if pit else []),
+        ] + (["annual fundamentals without an explicit prepared annual_lagged source; "
+              "earnings-announcement events and analyst data"] if pit else []),
+        "annual_lagged": {
+            "supported": True,
+            "requires_explicit_source": True,
+            "data_setting": "data.fundamentals=true, data.fundamentals_basis=annual_lagged, "
+                            "data.annual_source=<prepared directory>",
+            "fields": ["at", "ceq", "revt", "cogs"],
+            "timing": "prior-calendar-year data at the last June close; next-open execution",
+            "limitation": "Current annual STD values may include revisions; "
+                          "not authenticated first-reported data.",
+        },
         "first_reported": {
             "available": pit,
             "data_setting": "data.fundamentals=true and data.fundamentals_basis=first_reported",

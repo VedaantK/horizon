@@ -10,13 +10,14 @@ from dataclasses import replace
 
 import numpy as np
 
+from concordance.memory import stored
 from concordance.panel import MarketPanel, derive_prices
 from concordance.strategy import LookaheadError, Strategy, build_schedule
 
 
 def truncate(panel: MarketPanel, last: int) -> MarketPanel:
     """Panel containing sessions 0..last only, with derived prices recomputed."""
-    f = {k: v[: last + 1].copy() for k, v in panel.fields.items()}
+    f = {k: stored(v[: last + 1].copy()) for k, v in panel.fields.items()}
     tr, ex, liq, val = derive_prices(f["open"], f["close"], f["ret"])
     return replace(panel, sessions=panel.sessions[: last + 1], fields=f,
                    member=panel.member[: last + 1].copy(), tr_close=tr, exec_price=ex,

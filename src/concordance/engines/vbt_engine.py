@@ -109,6 +109,8 @@ def _flex_order(c, cols, size, price, fee, k):
 
 def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
         init_cash: float) -> BacktestResult:
+    from concordance.memory import allocate, stored
+
     T, N = panel.shape
     close = pd.DataFrame(panel.tr_close, index=panel.sessions, columns=panel.assets)
 
@@ -123,7 +125,7 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
     charged = np.zeros(1)
     # At most one open order per (session, asset), plus the intraday fills the schedule has.
     max_orders = T * N + int(np.isfinite(sched.exit_price).sum() + sched.limit_filled.sum())
-    log = np.full(max_orders, -1, dtype=np.int64)
+    log = allocate((max_orders,), np.int64, -1)
     log_n = np.zeros(1, dtype=np.int64)
     args = (f64(panel.exec_price), f64(tables.base_fee), f64(sched.weights), b(sched.has),
             b(sched.hold), b(panel.liquidate), b(sched.gap_exit), f64(sched.stop),
@@ -157,7 +159,7 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables,
     charged = np.cumsum(borrow_out)
     equity = pf.value().to_numpy(dtype=float) - charged
     cash = pf.cash().to_numpy(dtype=float) - charged
-    positions = pf.assets().to_numpy(dtype=float)
+    positions = stored(pf.assets().to_numpy(dtype=float))
     wiped = (positions < 0).any(axis=1) & ~(equity > 0)
     if wiped.any():
         i = int(np.argmax(wiped))

@@ -197,7 +197,12 @@ def _child(path: str, params: dict | None, real_window: tuple[str, str] | None) 
         panel = build_panel(random_long_frame(seed, n_assets=50, n_sessions=T,
                                               halt_rate=halts, missing_open_rate=no_open))
         panel = random_links(panel, seed)  # exercises view.customer_weights()
-        panel = random_fundamentals(panel, seed)  # exercises view.fundamental()
+        if getattr(s, "fundamentals_basis", None) == "annual_lagged":
+            from concordance.data.annual import random_annual
+
+            panel = random_annual(panel, seed)
+        else:
+            panel = random_fundamentals(panel, seed)  # exercises view.fundamental()
         # us_liquid's S&P flag (a fixed fifth of the assets) so strategies may read it.
         panel.fields["sp500"] = np.zeros(panel.shape)
         panel.fields["sp500"][:, : panel.shape[1] // 5] = 1.0
@@ -279,6 +284,9 @@ def _child(path: str, params: dict | None, real_window: tuple[str, str] | None) 
 
                 panel = attach_customer_links(panel)
             if "fundamental(" in Path(path).read_text():
+                if getattr(s, "fundamentals_basis", None) == "annual_lagged":
+                    raise ValueError("annual real-data validation requires a backtest request "
+                                     "with explicit data.annual_source")
                 from concordance.data.fundamentals import attach_fundamentals
 
                 panel = attach_fundamentals(panel)
@@ -322,7 +330,12 @@ def validate_file(path: str | Path, params: dict | None = None,
         return rep
     arg = json.dumps({"path": str(path), "params": params, "real": real_window})
     try:
-        cp = subprocess.run([sys.executable, "-I", "-m", "concordance.authoring.validate",
+        # The interpreter may have another checkout installed. Keep isolated mode,
+        # but run this validator's trusted source tree in the child too.
+        bootstrap = ("import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); "
+                     "runpy.run_module('concordance.authoring.validate',run_name='__main__')")
+        cp = subprocess.run([sys.executable, "-I", "-c", bootstrap,
+                             str(Path(__file__).resolve().parents[2]),
                              "--child", arg], capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         rep["errors"].append(_err("timeout", f"validation took longer than {timeout:.0f}s: "

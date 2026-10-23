@@ -115,6 +115,24 @@ def trailing_liquidity(panel: MarketPanel, window: int, min_obs: int):
 
 def exec_tables(panel: MarketPanel, costs: CostModel | None = None,
                 liquidity: LiquidityModel | None = None) -> ExecTables:
+    from dataclasses import replace
+
+    from concordance.memory import STORE, allocate, blocks, stored
+
+    if STORE.get() is not None:
+        arrays = {name: allocate(panel.shape, order="F") for name in
+                  ("base_fee", "cap_buy", "cap_sell", "adv", "sigma")}
+        for cols in blocks(panel.shape[1]):
+            p = replace(panel, fields={k: v[:, cols] for k, v in panel.fields.items()},
+                        tr_close=panel.tr_close[:, cols], liquidate=panel.liquidate[:, cols])
+            tables = _exec_tables(p, costs, liquidity)
+            for name, out in arrays.items():
+                out[:, cols] = getattr(tables, name)
+        return replace(tables, **{name: stored(value) for name, value in arrays.items()})
+    return _exec_tables(panel, costs, liquidity)
+
+
+def _exec_tables(panel, costs, liquidity):
     costs = costs or CostModel()
     base = costs.fee_rates(panel)
     T, N = panel.shape

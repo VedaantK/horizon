@@ -44,7 +44,8 @@ DEFAULTS: dict = {
     "run_id": None,
     "strategy": {"path": None, "params": {}},
     "data": {"universe": "sp500", "start": None, "end": None, "lake": None,
-             "customer_links": False, "fundamentals": False, "fundamentals_basis": "restated"},
+             "customer_links": False, "fundamentals": False, "fundamentals_basis": "restated",
+             "annual_source": None},
     "initial_capital": 1_000_000.0,
     "engines": list(ENGINES),
     "costs": {"commission_bps": 1.0, "default_half_spread_bps": 5.0,
@@ -55,6 +56,7 @@ DEFAULTS: dict = {
     "validation": {"program": "default", "placebo": 0, "lookahead_cuts": 3},
     "lockbox": {"unlock_reason": None},
     "report": False,
+    "memory": {"mode": "ram", "asset_batch_size": 256, "bar_batch_sessions": 20},
     # Used only when data.universe is "futures" (docs/SEMANTICS.md, "Futures").
     "futures": {"markets": None, "commission": 2.5, "slippage_ticks": 1.0,
                 "max_margin": 0.5, "sessions_before": 5},
@@ -131,6 +133,15 @@ def resolve_request(request: dict) -> dict:
                             if not (k == "liquidity" and v is None)})
     if liq_off:
         req["liquidity"] = None
+    memory = req["memory"]
+    if not isinstance(memory, dict) or memory.get("mode") not in ("ram", "disk"):
+        raise RequestError("memory.mode must be ram or disk")
+    for key in ("asset_batch_size", "bar_batch_sessions"):
+        if (isinstance(memory[key], bool) or not isinstance(memory[key], int)
+                or not 1 <= memory[key] <= 4096):
+            raise RequestError(f"memory.{key} must be an integer in [1,4096]")
+    if memory["mode"] == "disk" and req["data"]["universe"] != "us_liquid":
+        raise RequestError("disk mode currently supports data.universe=us_liquid")
     if not req["strategy"]["path"]:
         raise RequestError("strategy.path is required")
     if req["data"]["universe"] not in UNIVERSES:
@@ -166,8 +177,16 @@ def resolve_request(request: dict) -> dict:
     for flag in ("customer_links", "fundamentals"):
         if not isinstance(req["data"][flag], bool):
             raise RequestError(f"data.{flag} must be true or false")
-    if req["data"]["fundamentals_basis"] not in ("restated", "first_reported"):
-        raise RequestError("data.fundamentals_basis must be restated or first_reported")
+    if req["data"]["fundamentals_basis"] not in ("restated", "first_reported", "annual_lagged"):
+        raise RequestError("data.fundamentals_basis must be restated, first_reported "
+                           "or annual_lagged")
+    annual_source = req["data"]["annual_source"]
+    if req["data"]["fundamentals_basis"] == "annual_lagged":
+        if (not req["data"]["fundamentals"] or not isinstance(annual_source, str)
+                or not annual_source):
+            raise RequestError("annual_lagged requires fundamentals=true and data.annual_source")
+    elif annual_source is not None:
+        raise RequestError("data.annual_source requires annual_lagged basis")
     if pd.Timestamp(req["data"]["start"]) >= pd.Timestamp(req["data"]["end"]):
         raise RequestError("data.start must be before data.end")
     bad = set(req["engines"]) - set(ENGINES)
@@ -246,10 +265,15 @@ def _fill_kind(panel: MarketPanel, s: Schedule, f: pd.DataFrame) -> np.ndarray:
 
 
 def _write_artifacts(out: Path, panel: MarketPanel, res, s: Schedule) -> dict:
+    from concordance.memory import allocate
+
     sessions, assets = panel.sessions, np.asarray(panel.assets)
-    val = pd.DataFrame(panel.tr_close).ffill().to_numpy()
+    val = panel.val_price
+    value = allocate(panel.shape)
     with np.errstate(invalid="ignore"):
-        value = np.nan_to_num(res.positions * val)
+        for lo in range(0, len(sessions), 128):
+            sl = slice(lo, lo + 128)
+            value[sl] = np.nan_to_num(res.positions[sl] * val[sl])
     eq = pd.DataFrame({"date": sessions, "equity": res.equity, "cash": res.cash,
                        "gross_exposure": np.abs(value).sum(1) / res.equity,
                        "n_positions": (res.positions != 0).sum(1)})
@@ -361,6 +385,11 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
     from concordance.data.ingest import default_lake
 
     lake = Path(req["data"]["lake"] or default_lake())
+    expected_basis = getattr(strategy, "fundamentals_basis", None)
+    if expected_basis and (not req["data"]["fundamentals"]
+                           or req["data"]["fundamentals_basis"] != expected_basis):
+        raise RequestError(f"strategy requires data.fundamentals=true and "
+                           f"data.fundamentals_basis={expected_basis}")
     log(f"loading panel {req['data']['start']} .. {req['data']['end']}")
     if req["data"]["universe"] == "futures":
         return _load_futures(req, strategy, lake)
@@ -383,7 +412,12 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
     # Never invent unavailable volume history or weaken a strategy's own requirement.
     warmup = max(strategy.warmup(), min(execution_history, available_execution_history))
     if us:
-        from concordance.data.us_universe import load_us_panel
+        from concordance.memory import STORE
+
+        if STORE.get() is not None:
+            from concordance.data.disk_panel import load_disk_us_panel as load_us_panel
+        else:
+            from concordance.data.us_universe import load_us_panel
 
         panel = load_us_panel(req["data"]["start"], req["data"]["end"], lake=lake,
                               warmup_sessions=warmup,
@@ -408,6 +442,14 @@ def load_panel(req: dict, strategy: Strategy, log=lambda msg: None):
         data["customer_links"] = {**panel.meta["customer_links"],
                                   "sha256": _sha256_file(lake / "customer_links.parquet")}
     if req["data"]["fundamentals"]:
+        if req["data"]["fundamentals_basis"] == "annual_lagged":
+            from concordance.data.annual import MANIFEST, attach
+
+            source = Path(req["data"]["annual_source"])
+            panel = attach(panel, source)
+            data["fundamentals"] = {**panel.meta["fundamentals"],
+                                    "manifest_sha256": _sha256_file(source / MANIFEST)}
+            return panel, lake, data
         if req["data"]["fundamentals_basis"] == "first_reported":
             from concordance.data.first_reported_panel import ADMISSION, FILE, attach
 
@@ -463,6 +505,23 @@ def request_tables(req: dict, panel: MarketPanel):
 
 
 def run_backtest(request: dict, output_dir: str | Path | None = None,
+                 panel: MarketPanel | None = None, quiet: bool = True) -> dict:
+    from concordance.memory import ArrayStore
+
+    try:
+        req = resolve_request(request)
+    except RequestError:
+        return _run_backtest(request, output_dir, panel, quiet)
+    if req["memory"]["mode"] == "ram":
+        return _run_backtest(req, output_dir, panel, quiet)
+    out = Path(output_dir or REPO / "runs" / req["run_id"])
+    out.mkdir(parents=True, exist_ok=True)
+    with ArrayStore(out, req["memory"]["asset_batch_size"],
+                    req["memory"]["bar_batch_sessions"]):
+        return _run_backtest(req, out, panel, quiet)
+
+
+def _run_backtest(request: dict, output_dir: str | Path | None = None,
                  panel: MarketPanel | None = None, quiet: bool = True) -> dict:
     """Run one request. Writes artifacts and result.json to `output_dir` (default
     runs/<run_id>). `panel` overrides the data section (tests, synthetic data)."""
@@ -542,6 +601,13 @@ def run_backtest(request: dict, output_dir: str | Path | None = None,
         diag["messages"].append(f"{type(e).__name__}: {e}")
         diag["traceback"] = traceback.format_exc(limit=-8)
     manifest["finished_at"] = datetime.now(UTC).isoformat()
+    from concordance.memory import STORE
+
+    if STORE.get() is not None:
+        manifest["memory"] = {"mode": "disk", "mapped_bytes": STORE.get().bytes,
+                              "mapped_files": STORE.get().files,
+                              "asset_batch_size": STORE.get().batch_assets,
+                              "bar_batch_sessions": STORE.get().bar_sessions}
     manifest["elapsed_s"] = round(time.time() - t0, 2)
     result = _jsonable(result)
     (out / "result.json").write_text(json.dumps(result, indent=2, default=str))
@@ -550,7 +616,7 @@ def run_backtest(request: dict, output_dir: str | Path | None = None,
 
 
 def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
-    from concordance.reconcile import reconcile, valuation_marks
+    from concordance.reconcile import ReconciliationReport, reconcile
     from concordance.report import factor_exposures, html_report, leg_attribution, metrics
     from concordance.runner import run_engine
     from concordance.strategy import build_schedule
@@ -573,11 +639,21 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
         return _evaluate_futures(req, panel, strategy, sched, out, lake, log, diag)
     tables = request_tables(req, panel)
     results = {}
-    for e in req["engines"]:
+    checks = []
+    engine_names = sorted(req["engines"], key=lambda e: e != "reference")
+    for e in engine_names:
         log(f"engine: {e}")
-        results[e] = run_engine(e, panel, sched, tables, req["initial_capital"])
-    report = (reconcile(results, valuation_marks(panel.tr_close))
-              if len(results) > 1 else None)
+        candidate = run_engine(e, panel, sched, tables, req["initial_capital"])
+        if not results:
+            results[e] = candidate
+        else:
+            pair = reconcile({**results, e: candidate}, panel.val_price)
+            checks.extend(pair.checks)
+            del candidate
+            import gc
+
+            gc.collect()
+    report = ReconciliationReport(checks) if len(engine_names) > 1 else None
     if report is not None:
         diag["reconciliation"] = report.summary()
         if not report.ok:
@@ -591,7 +667,7 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
     start = panel.meta.get("warmup_sessions", 0)
     bench = panel.meta.get("benchmark")
     m = metrics(res, start=start, benchmark=bench)
-    m.update(leg_attribution(res, valuation_marks(panel.tr_close), start))
+    m.update(leg_attribution(res, panel.val_price, start))
     ff_path = lake / "ff_factors_daily.parquet"
     if ff_path.exists():
         m.update(factor_exposures(res.returns.iloc[max(start, 1):],
@@ -641,9 +717,15 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
                                                            index=False)
         artifacts["crash_protection"] = "crash_protection.parquet"
     if req["report"]:
+        extra = {"reconciliation": diag.get("reconciliation", "single engine"),
+                 "metrics": json.dumps(_jsonable(m), indent=2, default=str)}
+        limitation = panel.meta.get("fundamentals", {}).get("limitation")
+        if limitation:
+            extra["accounting data limitation"] = limitation
+        if diag["warnings"]:
+            extra["execution/data notes"] = "\n".join(diag["warnings"])
         html_report(res, out / "report.html", title=getattr(strategy, "name", "strategy"),
-                    extra={"reconciliation": diag.get("reconciliation", "single engine"),
-                           "metrics": json.dumps(_jsonable(m), indent=2, default=str)},
+                    extra=extra,
                     benchmark=bench, start=start)
         artifacts["report"] = "report.html"
     artifacts.update(strategy="strategy.py", request="request.json")

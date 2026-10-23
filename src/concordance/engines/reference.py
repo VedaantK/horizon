@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from concordance.costs import ExecTables
+from concordance.memory import allocate
 from concordance.panel import MarketPanel
 from concordance.planner import plan_session
 from concordance.result import FILL_COLUMNS, AccountWipedOut, BacktestResult
@@ -33,7 +34,7 @@ def run(panel: MarketPanel, sched: Schedule, tables: ExecTables, init_cash: floa
 
     equity = np.empty(T)
     cash_hist = np.empty(T)
-    pos_hist = np.empty((T, N))
+    pos_hist = allocate((T, N))
     fills: list[tuple] = []
     scaled: list[int] = []
     borrow_hist = np.zeros(T)
