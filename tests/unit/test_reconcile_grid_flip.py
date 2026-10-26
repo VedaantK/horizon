@@ -1,6 +1,8 @@
 """A sub-1e-9 money difference can tip an order size across a half step of the 1e-6 grid.
 Reconciliation accepts exactly that one step and only the money it explains."""
 
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 
@@ -115,3 +117,27 @@ def test_without_scaling_only_the_value_gap_moves_targets():
     assert reconcile(results, marks).ok
     results, marks = scaled_pair(6, scaled=False, cash0=30_000.0)
     assert not reconcile(results, marks).ok
+
+
+def test_float_spacing_on_a_huge_position_is_not_a_mismatch():
+    # Momentum stress run, 2014-05-01: an explained 2-step flip on a 15.2M-share fill left
+    # positions 2e-6 + one float64 ulp (1.86e-9 > QTY_TOL) apart. Steps are still checked.
+    def pair(ref_qty, other_qty, ref_pos, other_pos):
+        out = {}
+        for engine, qty, pos in (("reference", ref_qty, ref_pos),
+                                 ("nautilus", other_qty, other_pos)):
+            price = 0.002933966
+            fills = pd.DataFrame([(0, 0, 0, qty, price, 0.0)], columns=FILL_COLUMNS)
+            cash = np.full(3, CASH0 - qty * price)
+            positions = np.full((3, 1), pos)
+            out[engine] = BacktestResult(engine, SESSIONS, ASSETS, cash + pos * price, cash,
+                                         positions, fills)
+        return out, np.full((3, 1), 0.002933966)
+    qa, qb = 15188380.968327, 15188380.968325002  # as both engines recorded the fill
+    results, marks = pair(qa, qb, qa, 15188380.968325)
+    assert abs(qa - qb) < abs(qa - 15188380.968325) - 1e-9
+    with patch("concordance.reconcile._qty_allowance", return_value=np.array([2e-6])):
+        assert reconcile(results, marks).ok, reconcile(results, marks).summary()
+        results, marks = pair(qa, qb, qa, 15188380.968322)
+        out = reconcile(results, marks)
+        assert not out.ok and "position differs" in out.summary()

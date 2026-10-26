@@ -31,6 +31,7 @@ from concordance.result import BacktestResult
 MONEY_TICK = 1e-9  # per-fill money rounding allowance
 REL_FLOAT = 1e-9  # float64 accumulation allowance relative to equity
 QTY_TOL = 1e-9  # quantities are on a 1e-6 grid; anything beyond float noise is a mismatch
+QTY_ULPS = 4  # float64 spacing exceeds QTY_TOL above ~8.4M shares; allow a few ulps there
 QTY_STEP = 1e-6  # one grid step: the most a rounding-boundary flip can move a quantity
 FEE_SLOPE = 1.5  # d(fee)/d(qty) <= 1.5 x fee/qty for a linear rate plus sqrt market impact
 PRICE_REL = 1e-12
@@ -99,8 +100,9 @@ def _compare(a: BacktestResult, b: BacktestResult,
     dq = (both["qty_a"] - both["qty_b"]).abs()
     fee_gap = (both["fee_a"] - both["fee_b"]).abs()
     allowed = _qty_allowance(a, b, both, dq, fee_gap, marks)
-    flip = (dq > QTY_TOL) & (dq <= allowed + QTY_TOL)
-    for _, r in both[dq > allowed + QTY_TOL].head(10).iterrows():
+    qty_tol = _qty_tol(both["qty_a"], both["qty_b"])
+    flip = (dq > qty_tol) & (dq <= allowed + qty_tol)
+    for _, r in both[dq > allowed + qty_tol].head(10).iterrows():
         chk.flag(r["session"], f"qty differs {sessions[int(r['session'])].date()} "
                             f"asset={a.assets[int(r['asset'])]}: {r['qty_a']} vs {r['qty_b']}")
     dp = (both["price_a"] - both["price_b"]).abs() > PRICE_REL * both["price_a"].abs() + 1e-12
@@ -159,15 +161,25 @@ def _compare(a: BacktestResult, b: BacktestResult,
             chk.flag(i, f"{label} diverges first at {sessions[i].date()}: "
                                 f"{xa[i]!r} vs {xb[i]!r} (tol {tol[i]:.2e})")
 
-    pos_bad = dpos > pos_allow + QTY_TOL
-    if pos_bad.any():
-        i, j = np.argwhere(pos_bad)[0]
+    pos_bad = np.argwhere(dpos > pos_allow + QTY_TOL)  # then the size-aware check below
+    if len(pos_bad):
+        i, j = pos_bad.T
+        pos_bad = pos_bad[dpos[i, j] > pos_allow[i, j]
+                          + _qty_tol(a.positions[i, j], b.positions[i, j])]
+    if len(pos_bad):
+        i, j = pos_bad[0]
         chk.flag(i, f"position differs at {sessions[i].date()} asset={a.assets[j]}: "
                             f"{a.positions[i, j]} vs {b.positions[i, j]}")
     if a.scaled_sessions != b.scaled_sessions:
         differ = set(a.scaled_sessions) ^ set(b.scaled_sessions)
         chk.flag(min(differ) if differ else None, "buy scaling happened on different sessions")
     return chk
+
+
+def _qty_tol(qa, qb):
+    """QTY_TOL, or a few float64 ulps of the larger quantity when that is coarser."""
+    big = np.maximum(np.abs(np.asarray(qa, float)), np.abs(np.asarray(qb, float)))
+    return np.maximum(QTY_TOL, QTY_ULPS * np.spacing(big))
 
 
 def _qty_allowance(a: BacktestResult, b: BacktestResult, both: pd.DataFrame,
