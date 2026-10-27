@@ -20,7 +20,7 @@ LONG_ONLY_ORDERS = ("stop_loss", "take_profit", "stop_loss_pct", "take_profit_pc
                     "entry_limit")
 
 NOT_SUPPORTED = [
-    "intraday, minute or tick data (decisions use daily closes)",
+    "intraday data through the daily run_backtest request (use concordance intraday)",
     "stocks outside the S&P 500 (members as of each date, survivorship-free)",
     "net long weight above 1 (no margin loans)",
     "gross weight above 2",
@@ -59,6 +59,10 @@ def capabilities(lake: str | Path | None = None) -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
         "frequency": "daily",
+        "intraday": {"available": True, "interface": "concordance intraday",
+                     "frequency": "1m", "engines": ["reference", "replay"],
+                     "requires": ["minute OHLCV", "prior-minute NBBO", "completed-bar signals"],
+                     "note": "separate from the daily run_backtest request"},
         "universe": ["sp500", *(["us_liquid"] if us else []), "futures"],
         "decision": "at each session's close, from data up to and including that close",
         "execution": {

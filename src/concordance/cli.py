@@ -5,6 +5,7 @@
   concordance link-customers                  point-in-time supplier -> customer links
   concordance run STRATEGY.py --start --end   run all engines, reconcile, validate, report
   concordance backtest REQUEST.json           the same, driven by a JSON request (docs/RUN_API.md)
+  concordance intraday --bars --signals        reconcile minute-bar signal execution
   concordance reproduce RUN_DIR               re-run a saved run and check it matches
   concordance diagnose RUN_DIR                where and why engines stopped agreeing
   concordance validate STRATEGY.py            check a strategy file against the contract
@@ -17,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -29,6 +31,33 @@ from concordance.api import ENGINES, reproduce, run_backtest
 
 ALIASES = {"ref": "reference", "vbt": "vectorbt", "naut": "nautilus"}
 REPO = Path(__file__).resolve().parents[2]
+
+
+def cmd_intraday(a):
+    from dataclasses import asdict
+
+    from concordance.intraday import IntradayConfig, run_intraday
+
+    bars, signals = Path(a.bars), Path(a.signals)
+    cfg = IntradayConfig(**json.loads(Path(a.config).read_text())) if a.config else IntradayConfig()
+    result = run_intraday(pd.read_parquet(bars), pd.read_parquet(signals), cfg)
+    out = Path(a.output)
+    out.mkdir(parents=True, exist_ok=True)
+    result["fills"].to_parquet(out / "fills.parquet", index=False)
+    result["equity"].to_parquet(out / "equity.parquet", index=False)
+    if result["status"] == "ok":
+        result["daily_equity"].rename("equity").to_frame().to_parquet(out / "daily_equity.parquet")
+    manifest = {
+        "bars_sha256": hashlib.sha256(bars.read_bytes()).hexdigest(),
+        "signals_sha256": hashlib.sha256(signals.read_bytes()).hexdigest(),
+        "config": asdict(cfg),
+        "engines": ["reference", "replay"],
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    summary = {k: v for k, v in result.items() if k not in ("fills", "equity", "daily_equity")}
+    (out / "result.json").write_text(json.dumps(summary, indent=2, default=str))
+    print(json.dumps(summary, indent=2, default=str))
+    _done(0 if result["status"] == "ok" else 1)
 
 
 def cmd_ingest(a):
@@ -332,6 +361,13 @@ def main(argv=None):
     s.add_argument("--unlock-lockbox", help="reason for a logged one-shot lockbox read")
     common(s)
     s.set_defaults(fn=cmd_run)
+
+    s = sub.add_parser("intraday", help="reconcile minute-bar signal execution")
+    s.add_argument("--bars", required=True, help="normalized minute OHLCV+quotes parquet")
+    s.add_argument("--signals", required=True, help="completed-bar signals parquet")
+    s.add_argument("--config", help="JSON IntradayConfig overrides")
+    s.add_argument("-o", "--output", required=True)
+    s.set_defaults(fn=cmd_intraday)
 
     s = sub.add_parser("backtest", help="run a JSON request (docs/RUN_API.md)")
     s.add_argument("request")

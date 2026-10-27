@@ -89,3 +89,14 @@ Kept, and only after fixes and new tests: the CRSP CIZ column conventions; the C
 pull field lists (plus a new point-in-time join); the eventlab backtester's design (as the
 reference engine); the DSR core and `effective_independent_trials`; EDGAR 8-K timing; the
 Panama roll builder. Everything else was discarded. See `docs/QUANTMEGA_AUDIT.md`.
+
+## Intraday research execution
+
+`concordance intraday --bars minute_bars.parquet --signals signals.parquet -o runs/minute`
+executes completed-bar stock signals at the next minute open. It is a separate
+minute-bar interface; the daily `backtest` request and three-engine contract above are
+unchanged. Minute execution reconciles a reference event loop with an independent
+replay loop. It requires prior-minute NBBO quotes and volume, supports long and short
+stops/targets, resolves same-minute stop/target ambiguity against the trade, and exits
+positions at each asset's last regular-session bar. See the sibling
+`/home/vkulk/intraday-research` repository for the data contract and research workflow.
