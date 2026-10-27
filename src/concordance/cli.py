@@ -282,7 +282,7 @@ def _engines(s: str):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="concordance")
+    p = argparse.ArgumentParser(prog="horizon")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("ingest", help="validate WRDS exports into the lake")
@@ -411,7 +411,7 @@ def main(argv=None):
     s.add_argument("--allow-open-questions", action="store_true")
     s.set_defaults(fn=cmd_author)
 
-    s = sub.add_parser("capabilities", help="what Concordance can test, as JSON")
+    s = sub.add_parser("capabilities", help="what Horizon can test, as JSON")
     s.add_argument("--lake")
     s.set_defaults(fn=cmd_capabilities)
 

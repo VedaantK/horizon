@@ -1,6 +1,6 @@
 # Strategy contract
 
-A Concordance strategy is **one Python file**. This page is everything an author (human or
+A Horizon strategy is **one Python file**. This page is everything an author (human or
 AI) needs to write one that the backtester will run. Check a file with:
 
 ```bash

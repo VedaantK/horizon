@@ -13,8 +13,8 @@ from dataclasses import dataclass
 class ExportSpec:
     name: str  # file stem the user saves the export as (any of .parquet/.csv/.csv.gz)
     wrds_table: str
-    columns: dict[str, str]  # WRDS column -> Concordance column
-    required: tuple[str, ...]  # Concordance columns that must be present
+    columns: dict[str, str]  # WRDS column -> Horizon column
+    required: tuple[str, ...]  # Horizon columns that must be present
     date_columns: tuple[str, ...] = ()
 
 

@@ -4,7 +4,7 @@ Default verdict: discard. A piece was kept only if it was correct (or fixable), 
 and not already provided by vectorbt, Nautilus, hftbacktest, skfolio or quantstats.
 
 ## Kept (ported, fixed, re-tested)
-| QuantMega | Concordance | Fixes |
+| QuantMega | Horizon | Fixes |
 |---|---|---|
 | `quantlab/crsp.py` conventions | `data/schema.py`, `data/ingest.py`, `data/crsp.py` | Duplicates that conflict now raise; parameterized SQL; membership keyed by PERMNO with inclusive end dates; coverage gate; reproducible export spec |
 | `scripts/pull_wrds_compustat.py` field lists | `data/fundamentals.py` | Point-in-time join added (first session after `rdq`); YTD→quarterly; link valid on the availability date; a late-filed old quarter never overrides a newer one |

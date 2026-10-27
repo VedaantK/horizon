@@ -1,7 +1,7 @@
 # Getting the data through WRDS web query forms (IP-Auth accounts)
 
 IP-Auth accounts can't use WRDS Cloud, JupyterHub or the PostgreSQL connection. The web
-query forms on wrds-www.wharton.upenn.edu still give you everything Concordance needs.
+query forms on wrds-www.wharton.upenn.edu still give you everything Horizon needs.
 Connect from a CMU IP (on campus or through the VPN).
 
 Every WRDS web query form follows the same 4 steps:
@@ -32,7 +32,7 @@ Menu names can be worded slightly differently on your screen; look for the close
 Then make the PERMNO list for Query 2:
 ```bash
 cd ~/concordance
-uv run concordance permnos ~/wrds_exports/sp500_membership.csv -o ~/wrds_exports/permnos.txt
+uv run horizon permnos ~/wrds_exports/sp500_membership.csv -o ~/wrds_exports/permnos.txt
 ```
 This prints how many PERMNOs it wrote (expect roughly 1,500–2,000).
 
@@ -97,7 +97,7 @@ IP-Auth account; if so, skip it and tell me)
 ## Then
 ```bash
 cd ~/concordance
-uv run concordance ingest ~/wrds_exports
+uv run horizon ingest ~/wrds_exports
 ```
 Ingest prints a summary of every file. If it reports a missing or renamed column, paste the
 message to Claude. It lists the columns it found, so the schema can be adjusted in a minute.
@@ -107,7 +107,7 @@ Ingest checks that every final delisting return is already in the daily file (62
 on the 1994–2025 export). The v2 table records only a stock's final delisting, so it does not
 value the 18 temporary listing gaps (3 began while the stock was an S&P member: HealthSouth
 2003, Comverse 2007, Washington Mutual 2008). Those exits stay at the last price, and
-`concordance run` warns if a strategy held one. A delisting record dated inside a gap is used
+`horizon run` warns if a strategy held one. A delisting record dated inside a gap is used
 if one ever appears (e.g. from the legacy file).
 
 **Menu:** CRSP → Stock (v2) → **Delisting information** (the legacy Annual Update form with
@@ -139,8 +139,8 @@ folder by itself: datasets it doesn't contain keep their earlier ingest.
 
 Then:
 ```bash
-uv run concordance ingest ~/wrds_exports/customer
-uv run concordance link-customers
+uv run horizon ingest ~/wrds_exports/customer
+uv run horizon link-customers
 ```
 `link-customers` matches customer names to S&P 500 companies (exact normalized names and a
 short alias list automatically, resolved by the link valid at the fiscal date) and writes

@@ -1,8 +1,8 @@
-# Concordance
+# Horizon
 
 **A backtest result counts only when independent engines agree.**
 
-Concordance runs every strategy through three engines and accepts the result only if
+Horizon runs every strategy through three engines and accepts the result only if
 their fills, positions, cash and equity reconcile:
 
 | Engine | Role | Independent parts |
@@ -39,16 +39,16 @@ Shared between the engines: the data panel and one documented sizing rule
 uv sync                 # main environment (Python 3.13)
 (cd hft && uv sync)     # isolated hftbacktest environment
 ./check.sh              # lint + all tests (golden, randomized reconciliation, hft)
-uv run concordance demo --report reports/demo.html
+uv run horizon demo --report reports/demo.html
 ```
 
 With WRDS data (see [`docs/WRDS_EXPORT.md`](docs/WRDS_EXPORT.md)):
 ```bash
-uv run concordance ingest ~/wrds_exports
-uv run concordance run examples/momentum_12_1.py --start 2000-01-01 --end 2021-12-31 \
+uv run horizon ingest ~/wrds_exports
+uv run horizon run examples/momentum_12_1.py --start 2000-01-01 --end 2021-12-31 \
     --placebo 200 --report reports/mom.html
-uv run concordance backtest request.json -o runs/x     # JSON in, JSON + parquet out
-uv run concordance reproduce runs/x                    # re-run and compare
+uv run horizon backtest request.json -o runs/x     # JSON in, JSON + parquet out
+uv run horizon reproduce runs/x                    # re-run and compare
 ```
 Every run writes a directory with `result.json` (status, metrics, diagnostics, a
 reproducibility manifest), equity/fills/positions/orders as parquet, and copies of the
@@ -75,12 +75,12 @@ def make_strategy(**params):
     return MyStrategy(**params)
 ```
 The full contract (data fields, order rules, common mistakes) is
-[`docs/STRATEGY_CONTRACT.md`](docs/STRATEGY_CONTRACT.md). `concordance validate file.py`
+[`docs/STRATEGY_CONTRACT.md`](docs/STRATEGY_CONTRACT.md). `horizon validate file.py`
 checks a file against it. [`examples/swing_pullback.py`](examples/swing_pullback.py) uses
 every order type.
 
 ## Writing strategies with AI tools
-`concordance formalize` turns an idea into a schema-checked spec; `concordance author`
+`horizon formalize` turns an idea into a schema-checked spec; `horizon author`
 has Claude Code or Codex implement it in an isolated workspace, with the validator in the
 loop. See [`prompts/README.md`](prompts/README.md).
 
@@ -92,11 +92,11 @@ Panama roll builder. Everything else was discarded. See `docs/QUANTMEGA_AUDIT.md
 
 ## Intraday research execution
 
-`concordance intraday --bars minute_bars.parquet --signals signals.parquet -o runs/minute`
+`horizon intraday --bars minute_bars.parquet --signals signals.parquet -o runs/minute`
 executes completed-bar stock signals at the next minute open. It is a separate
 minute-bar interface; the daily `backtest` request and three-engine contract above are
 unchanged. Minute execution reconciles a reference event loop with an independent
 replay loop. It requires prior-minute NBBO quotes and volume, supports long and short
 stops/targets, resolves same-minute stop/target ambiguity against the trade, and exits
 positions at each asset's last regular-session bar. See the sibling
-`/home/vkulk/intraday-research` repository for the data contract and research workflow.
+`/home/vkulk/tide` repository for the data contract and research workflow.

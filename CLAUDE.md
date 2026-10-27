@@ -1,4 +1,4 @@
-# Concordance — notes for AI contributors
+# Horizon — notes for AI contributors
 
 Multi-engine backtester. Read `README.md` and `docs/SEMANTICS.md` first.
 

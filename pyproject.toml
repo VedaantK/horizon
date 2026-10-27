@@ -1,5 +1,5 @@
 [project]
-name = "concordance"
+name = "horizon"
 version = "0.1.0"
 description = "Multi-engine backtester: a result counts only when independent engines agree."
 requires-python = ">=3.13,<3.14"
@@ -20,6 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
+horizon = "concordance.cli:main"
 concordance = "concordance.cli:main"
 
 [dependency-groups]

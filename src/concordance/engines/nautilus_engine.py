@@ -64,7 +64,7 @@ BAR_VOLUME = Quantity(1_000_000_000, QTY_DECIMALS)
 
 def _currency() -> Currency:
     # Not Currency.from_str: for an unknown code it silently invents an 8-decimal currency.
-    ccy = Currency("CUSD", PRICE_DECIMALS, 0, "Concordance USD", CurrencyType.FIAT)
+    ccy = Currency("CUSD", PRICE_DECIMALS, 0, "Horizon USD", CurrencyType.FIAT)
     Currency.register(ccy, overwrite=True)
     assert Currency.from_str("CUSD", strict=True).precision == PRICE_DECIMALS
     return ccy

@@ -37,7 +37,7 @@ A missing `ret` on a priced row is never treated as 0. Three patterns occur in t
     `PERMNO + k * 1_000_000` (`crsp.permno_of` recovers the PERMNO). Ids only reflect
     relistings that have already happened.
   - A position in the earlier listing is force-sold at the last price before the gap.
-    This is an assumption, so `concordance run` prints a warning whenever a strategy held
+    This is an assumption, so `horizon run` prints a warning whenever a strategy held
     such a position. Gaps that began while the stock was an S&P member are flagged
     `member_at_gap`.
   - No return or signal is ever chained across the gap.
@@ -257,7 +257,7 @@ the panel: `|net|, gross <= 8` instead of the cash account's 1 and 2.
 
 ### Session i, in order
 
-1. **Interest.** Cash earns `rf[i]`, the daily Fama-French risk-free return (WRDS `ff_factors_daily`; before it starts in 1990, the identical RF series from Ken French's data library, `concordance ingest-rf`, `lake/rf_daily.parquet`). Cash is equity,
+1. **Interest.** Cash earns `rf[i]`, the daily Fama-French risk-free return (WRDS `ff_factors_daily`; before it starts in 1990, the identical RF series from Ken French's data library, `horizon ingest-rf`, `lake/rf_daily.parquet`). Cash is equity,
    because P&L settles daily and positions cost no cash.
 2. **Open, when a target was decided at the previous close:**
    - Held contracts mark from the previous adjusted settle to the adjusted open.
@@ -286,7 +286,7 @@ A report on the reconciled daily returns, not a fourth engine: the strategy's fi
 unchanged. One fixed rule, declared before any strategy was scored with it:
 
 1. At the close of each month's last session, compare the S&P 500 total-return index
-   (rebuilt from members, `lake/sp500_tr_daily.parquet`, `concordance build-sp500`) with its
+   (rebuilt from members, `lake/sp500_tr_daily.parquet`, `horizon build-sp500`) with its
    200-session simple average. Below it: protected. At or above: invested.
 2. The switch trades at the next open, and that whole session still earns the old state.
    The new state first earns the return of the session after it.

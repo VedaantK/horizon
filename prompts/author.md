@@ -1,4 +1,4 @@
-Implement the StrategySpec in `spec.json` as a Concordance strategy file named
+Implement the StrategySpec in `spec.json` as a Horizon strategy file named
 `strategy.py` in the current directory.
 
 1. Read `STRATEGY_CONTRACT.md` (the contract: file shape, the `view` data, the `Orders`

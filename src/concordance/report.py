@@ -125,7 +125,7 @@ def _benchmark_metrics(b: pd.Series | None, index: pd.DatetimeIndex, periods: in
 def html_report(res: BacktestResult, path: Path, title: str,
                 benchmark: pd.Series | None = None, extra: dict | None = None,
                 start: int = 0) -> Path:
-    """quantstats tear sheet with Concordance's reconciliation/validation block prepended."""
+    """quantstats tear sheet with Horizon's reconciliation/validation block prepended."""
     import logging
 
     import quantstats as qs
@@ -144,7 +144,7 @@ def html_report(res: BacktestResult, path: Path, title: str,
                     download_filename=path.name)
     if extra:
         rows = "".join(f"<tr><td>{k}</td><td><pre>{v}</pre></td></tr>" for k, v in extra.items())
-        block = (f"<div style='margin:16px;font-family:monospace'><h2>Concordance</h2>"
+        block = (f"<div style='margin:16px;font-family:monospace'><h2>Horizon</h2>"
                  f"<table border=1 cellpadding=4>{rows}</table></div>")
         html = path.read_text()
         path.write_text(html.replace("<body>", "<body>" + block, 1))

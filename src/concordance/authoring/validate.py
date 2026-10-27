@@ -254,7 +254,7 @@ def _child(path: str, params: dict | None, real_window: tuple[str, str] | None) 
         if len(res) > 1:
             rep = reconcile(res)
             if not rep.ok:
-                errors.append(_err("execution", f"{tag}: engines disagree (a Concordance bug "
+                errors.append(_err("execution", f"{tag}: engines disagree (a Horizon bug "
                                    f"- report it):\n{rep.summary()}"))
         f = res["reference"].fills
         stats[f"market_{k + 1}"]["fills"] = int(len(f))

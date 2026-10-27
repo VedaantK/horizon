@@ -38,7 +38,7 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
 ```
 
 - `data.customer_links: true` loads `lake/customer_links.parquet` (built by
-  `concordance link-customers`) so the strategy can call `view.customer_weights()`. The
+  `horizon link-customers`) so the strategy can call `view.customer_weights()`. The
   manifest records the file's SHA-256 and link counts.
 - `data.fundamentals: true` loads `lake/comp_fundq.parquet` (with `lake/ccm_link.parquet`)
   so the strategy can call `view.fundamental(name)`. The manifest records the file's SHA-256,
@@ -52,7 +52,7 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
     - **Benchmark:** the members' cap-weighted total return. The equal-weighted one is in
       `meta`.
     - **Data:** `lake/crsp_daily_us.parquet`; with `data.fundamentals`,
-      `comp_fundq_us.parquet` (`concordance ingest-us DIR --daily`).
+      `comp_fundq_us.parquet` (`horizon ingest-us DIR --daily`).
   - `futures`: see docs/SEMANTICS.md, "Futures".
 - `strategy.params` go to the file's `make_strategy(**params)` (docs/STRATEGY_CONTRACT.md).
   A relative `strategy.path` in a request file is relative to that file.
@@ -64,10 +64,10 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
   `costs.min_trade_bps` skips rebalancing trades worth less than that share of portfolio
   value (full exits always trade); 0, the default, trades every change. See
   docs/SEMANTICS.md, planning step 3.
-- `concordance capabilities` prints, as JSON, what can be tested: view fields, weight
+- `horizon capabilities` prints, as JSON, what can be tested: view fields, weight
   limits, which orders are long-only, cost defaults, the lake's datasets and what is not
   supported. Coordinators should build their instructions from it.
-- `concordance diagnose RUN_DIR` reruns a saved run's engines and shows where the first
+- `horizon diagnose RUN_DIR` reruns a saved run's engines and shows where the first
   engine stops agreeing with the reference, with each engine's state and fills there.
 - `validation.program` names the trial ledger. Every run is recorded in it, and the deflated
   Sharpe counts all trials in the program. Use one program per research question.
@@ -91,7 +91,7 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
 | status | meaning |
 |---|---|
 | `ok` | engines agree; metrics are valid |
-| `rejected` | engines disagree: a Concordance bug, never a strategy result |
+| `rejected` | engines disagree: a Horizon bug, never a strategy result |
 | `lookahead` | the strategy's decisions change when future data is removed |
 | `strategy_error` | the file failed to load, or `decide` raised / returned something invalid, or equity reached 0 with shorts open (`AccountWipedOut`) |
 | `data_error` | coverage too low, lockbox, missing lake files |
@@ -136,7 +136,7 @@ Prices in `fills`/`orders` are on the total-return scale (dividends and splits f
 
 ### Manifest
 `started_at`, `finished_at`, `elapsed_s`, the resolved request, the strategy file's
-SHA-256, Concordance's git commit and whether the tree was dirty, the lake manifest's
-SHA-256, the panel shape and coverage, Python/package versions. `concordance reproduce`
+SHA-256, Horizon's git commit and whether the tree was dirty, the lake manifest's
+SHA-256, the panel shape and coverage, Python/package versions. `horizon reproduce`
 re-runs `request.json` with the copied `strategy.py` and reports which of status, equity,
 strategy source, data and code match.

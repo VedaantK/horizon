@@ -1,4 +1,4 @@
-# WRDS exports for Concordance
+# WRDS exports for Horizon
 
 > **IP-Auth / web-form only?** Use [`WRDS_WEB_EXPORT.md`](WRDS_WEB_EXPORT.md) instead.
 
@@ -8,7 +8,7 @@ with the **exact file name** shown, as `.parquet` (preferred) or `.csv.gz`. Put 
 folder, then run:
 
 ```bash
-uv run concordance ingest /path/to/that/folder
+uv run horizon ingest /path/to/that/folder
 ```
 
 Ingest checks the columns, rejects conflicting duplicates and writes `lake/manifest.json`
@@ -85,7 +85,7 @@ SELECT date, mktrf, smb, hml, rf, umd FROM ff.factors_daily WHERE date >= '1994-
 
 ## Things worth knowing
 - The legacy CRSP files (`crsp.dsf`, `crsp.msf`, `crsp.msedelist`) stopped updating after
-  2024. Concordance is built on the CIZ (`_v2`) tables, where `dlyret` already includes the
+  2024. Horizon is built on the CIZ (`_v2`) tables, where `dlyret` already includes the
   delisting return.
 - `dlyprc < 0` means there was no trade that day and the price is the bid/ask midpoint.
   Ingest takes the absolute value and counts those rows.

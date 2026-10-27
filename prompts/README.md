@@ -1,4 +1,4 @@
-# Prompting AI tools to write Concordance strategies
+# Prompting AI tools to write Horizon strategies
 
 Any model (Claude Code, Codex, or anything else) can write a runnable strategy. The format
 doesn't depend on the model being careful; three deterministic pieces enforce it:
@@ -9,7 +9,7 @@ doesn't depend on the model being careful; three deterministic pieces enforce it
 2. **One contract.** `docs/STRATEGY_CONTRACT.md` is the only description of the file format,
    the data and the order types. Every authoring prompt points at it. Change the contract,
    and every model's instructions change with it.
-3. **A validator in the loop.** `concordance validate strategy.py` checks the file
+3. **A validator in the loop.** `horizon validate strategy.py` checks the file
    statically and by running it (synthetic markets, determinism, look-ahead, all three
    engines). The authoring tool runs it itself and fixes what it reports. Then the driver
    runs it again and doesn't trust the tool's claim. Errors carry line numbers and hints, so
@@ -43,9 +43,9 @@ given. That's deliberate: ambiguity is where implementations diverge.
 
 | file | used by | output |
 |---|---|---|
-| `formalize.md` + `strategy_spec.schema.json` | `concordance formalize` | StrategySpec JSON |
-| `author.md` + `author_result.schema.json` | `concordance author`, round 1 | `strategy.py` + a summary |
-| `repair.md` | `concordance author`, later rounds | fixed `strategy.py` |
+| `formalize.md` + `strategy_spec.schema.json` | `horizon formalize` | StrategySpec JSON |
+| `author.md` + `author_result.schema.json` | `horizon author`, round 1 | `strategy.py` + a summary |
+| `repair.md` | `horizon author`, later rounds | fixed `strategy.py` |
 | `review.md` + `review.schema.json` | the coordinator (adversarial review) | verdict + up to 3 proposals |
 
 The schemas use the strict subset that OpenAI structured outputs accept: every property is

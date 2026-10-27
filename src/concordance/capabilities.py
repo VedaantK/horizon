@@ -1,6 +1,6 @@
-"""What Concordance can test, as data. `concordance capabilities` prints it as JSON.
+"""What Horizon can test, as data. `concordance capabilities` prints it as JSON.
 
-A coordinator (Colloquy) builds its instructions to strategy authors from this instead of
+A coordinator (Atlas) builds its instructions to strategy authors from this instead of
 keeping its own copy. Limits are read from the code that enforces them; `not_supported`
 is the list of requests to turn away rather than approximate.
 """

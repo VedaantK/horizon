@@ -1,6 +1,6 @@
 {
   "title": "StrategySpec",
-  "description": "A precise, testable trading strategy for Concordance (US equities, daily bars, long and short with net <= 1, gross <= 2). Every rule must be unambiguous enough to code without guessing.",
+  "description": "A precise, testable trading strategy for Horizon (US equities, daily bars, long and short with net <= 1, gross <= 2). Every rule must be unambiguous enough to code without guessing.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -260,7 +260,7 @@
       "items": {
         "type": "string"
       },
-      "description": "Parts of the idea Concordance cannot test yet (net leverage above 1, stops/limits on shorts, per-stock borrow costs, intraday, options, non-S&P stocks, fundamentals)."
+      "description": "Parts of the idea Horizon cannot test yet (net leverage above 1, stops/limits on shorts, per-stock borrow costs, intraday, options, non-S&P stocks, fundamentals)."
     }
   }
 }

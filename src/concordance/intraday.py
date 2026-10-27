@@ -1,4 +1,4 @@
-"""Minute-bar stock execution alongside Concordance's unchanged daily backtester.
+"""Minute-bar stock execution alongside Horizon's unchanged daily backtester.
 
 Signals are decisions at completed bars. The two engines independently resolve orders
 from 1-minute OHLC, then their trade ledgers and equity must agree. Quotes must be
