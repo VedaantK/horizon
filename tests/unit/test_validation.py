@@ -6,7 +6,9 @@ from concordance.costs import ZERO_COST, exec_tables
 from concordance.panel import build_panel
 from concordance.strategy import LookaheadError, Strategy, weight_schedule
 from concordance.validation.dsr import (
+    DSRResult,
     deflated_sharpe,
+    dsr_check,
     effective_independent_trials,
     expected_max_sharpe,
     probabilistic_sharpe,
@@ -35,6 +37,17 @@ def test_dsr_agrees_with_vectorbt_implementation():
                                    nb_trials=37, backtest_horizon=len(r),
                                    skew=np.array([ours.skew]), kurtosis=np.array([ours.kurt]))
     assert ours.dsr == pytest.approx(float(theirs[0]), abs=1e-12)
+
+
+def test_dsr_check_on_the_paper_example():
+    # Same worked example: DSR ~ 0.9004 (computed by the paper), so it fails the 0.95
+    # default and passes a 0.90 pass mark. The noise ceiling in the reason is 1.79.
+    d = DSRResult(dsr=0.9004, sharpe=2.5 / np.sqrt(250), sr0=expected_max_sharpe(100, 0.5 / 250),
+                n_trials=100, T=1250, skew=-3.0, kurt=10.0)
+    fail = dsr_check(d, periods=250)
+    assert not fail["passed"] and fail["threshold"] == 0.95
+    assert "0.900 < 0.95" in fail["reason"] and "ceiling of 1.79" in fail["reason"]
+    assert dsr_check(d, 0.90, periods=250)["passed"]
 
 
 def test_dsr_extreme_moments_fail_closed():

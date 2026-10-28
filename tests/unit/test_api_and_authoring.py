@@ -80,6 +80,24 @@ def test_statuses(panel, tmp_path):
     assert r["status"] == "lookahead"
 
 
+def test_dsr_check_is_a_verdict_not_a_failure(panel, tmp_path):
+    def run(dsr_min, where):
+        return run_backtest(request(panel, engines=["reference"], validation={
+            "program": "t", "lookahead_cuts": 0, "dsr_min": dsr_min}), tmp_path / where,
+            panel=panel)
+
+    for dsr_min, where in ((0.01, "lo"), (0.99, "hi")):
+        r = run(dsr_min, where)
+        assert r["status"] == "ok", r["diagnostics"]
+        c = r["metrics"]["dsr_check"]
+        assert c["threshold"] == dsr_min and c["dsr"] == r["metrics"]["dsr"]["dsr"]
+        assert c["passed"] == (c["dsr"] >= dsr_min)
+        warned = any("deflated Sharpe check failed" in w for w in r["diagnostics"]["warnings"])
+        assert warned == (not c["passed"])
+    for bad in (0, 1, 1.5, True, "0.9"):
+        assert run(bad, "bad")["status"] == "invalid_request"
+
+
 def test_static_check_flags_private_access_and_io():
     errs, _ = static_check("import os\nx = view._panel\nimport pandas as pd\n"
                            "pd.read_csv('f')\nSTRATEGY = 1\n")

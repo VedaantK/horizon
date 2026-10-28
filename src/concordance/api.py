@@ -52,7 +52,7 @@ DEFAULTS: dict = {
               "spread_multiplier": 1.0},
     "liquidity": {"participation": 0.10, "impact_coef": 1.0, "max_impact_bps": 500.0,
                   "window": 20, "min_obs": 10},
-    "validation": {"program": "default", "placebo": 0, "lookahead_cuts": 3},
+    "validation": {"program": "default", "placebo": 0, "lookahead_cuts": 3, "dsr_min": 0.95},
     "lockbox": {"unlock_reason": None},
     "report": False,
     # Used only when data.universe is "futures" (docs/SEMANTICS.md, "Futures").
@@ -190,6 +190,9 @@ def resolve_request(request: dict) -> dict:
         raise RequestError("costs.min_trade_bps must be below 10000 (100% of the portfolio)")
     if not isinstance(req["strategy"]["params"], dict):
         raise RequestError("strategy.params must be an object")
+    dmin = req["validation"]["dsr_min"]
+    if isinstance(dmin, bool) or not isinstance(dmin, int | float) or not 0 < dmin < 1:
+        raise RequestError("validation.dsr_min must be a number in (0, 1)")
     req["run_id"] = req["run_id"] or (datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-"
                                       + uuid.uuid4().hex[:8])
     return req
@@ -549,13 +552,39 @@ def run_backtest(request: dict, output_dir: str | Path | None = None,
     return result
 
 
+def _record_trial(req, strategy, rets, lake, m, diag) -> None:
+    """Record the run in its program's trial ledger, then deflate its Sharpe by the trials
+    made so far and judge it against `validation.dsr_min`."""
+    from concordance.validation.dsr import deflated_sharpe, dsr_check
+    from concordance.validation.ledger import TrialLedger
+
+    v = req["validation"]
+    ledger = TrialLedger(root=lake / "ledger", program=v["program"])
+    params = getattr(strategy, "params", req["strategy"]["params"])
+    trial = ledger.record(getattr(strategy, "name", type(strategy).__name__), params, rets,
+                          note=f"run {req['run_id']}", context={
+                              "source": _sha256_file(Path(req["strategy"]["path"])),
+                              "data": req["data"], "costs": req.get("costs"),
+                              "futures": req.get("futures"),
+                              "capital": req["initial_capital"],
+                              "data_manifest": _sha256_file(lake / "manifest.json")
+                              if (lake / "manifest.json").exists() else None})
+    n_eff = max(ledger.n_effective(), 1.0)
+    d = deflated_sharpe(rets.to_numpy(), n_trials=n_eff)
+    m["dsr"] = d.annualized()
+    m["dsr_check"] = dsr_check(d, v["dsr_min"])
+    if not m["dsr_check"]["passed"]:
+        diag["warnings"].append(f"deflated Sharpe check failed: {m['dsr_check']['reason']}")
+    m["trials_recorded"] = ledger.n_trials()
+    m["trials_effective"] = n_eff
+    m["trial_hash"] = trial
+
+
 def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
     from concordance.reconcile import reconcile, valuation_marks
     from concordance.report import factor_exposures, html_report, leg_attribution, metrics
     from concordance.runner import run_engine
     from concordance.strategy import build_schedule
-    from concordance.validation.dsr import deflated_sharpe
-    from concordance.validation.ledger import TrialLedger
     from concordance.validation.lookahead import check_truncation_invariance
     from concordance.validation.placebo import random_selection_placebo
 
@@ -609,21 +638,7 @@ def _evaluate(req, panel, strategy, fresh, out, lake, log, diag) -> dict:
                                 "set at or above the close (they fire at the next open)")
 
     rets = res.returns.iloc[max(start, 1):]
-    ledger = TrialLedger(root=lake / "ledger", program=v["program"])
-    params = getattr(strategy, "params", req["strategy"]["params"])
-    trial = ledger.record(getattr(strategy, "name", type(strategy).__name__), params, rets,
-                          note=f"run {req['run_id']}", context={
-                              "source": _sha256_file(Path(req["strategy"]["path"])),
-                              "data": req["data"], "costs": req.get("costs"),
-                              "futures": req.get("futures"),
-                              "capital": req["initial_capital"],
-                              "data_manifest": _sha256_file(lake / "manifest.json")
-                              if (lake / "manifest.json").exists() else None})
-    n_eff = max(ledger.n_effective(), 1.0)
-    m["dsr"] = deflated_sharpe(rets.to_numpy(), n_trials=n_eff).annualized()
-    m["trials_recorded"] = ledger.n_trials()
-    m["trials_effective"] = n_eff
-    m["trial_hash"] = trial
+    _record_trial(req, strategy, rets, lake, m, diag)
     if v["placebo"]:
         log(f"placebo: {v['placebo']} random portfolios")
         pl = random_selection_placebo(panel, sched.weights, sched.has, tables,
@@ -672,8 +687,6 @@ def _evaluate_futures(req, panel, strategy, sched, out, lake, log, diag) -> dict
     from concordance.futures import nautilus as fut_nt
     from concordance.futures.reconcile import reconcile_futures
     from concordance.report import factor_exposures, metrics
-    from concordance.validation.dsr import deflated_sharpe
-    from concordance.validation.ledger import TrialLedger
 
     if sched.uses_orders:
         raise StrategyError("futures take target weights only (no stop, take-profit or "
@@ -709,21 +722,7 @@ def _evaluate_futures(req, panel, strategy, sched, out, lake, log, diag) -> dict
     if req["validation"]["placebo"]:
         diag["warnings"].append("the stock placebo does not apply to futures; skipped")
     rets = res.returns.iloc[max(start, 1):]
-    ledger = TrialLedger(root=lake / "ledger", program=req["validation"]["program"])
-    params = getattr(strategy, "params", req["strategy"]["params"])
-    trial = ledger.record(getattr(strategy, "name", type(strategy).__name__), params, rets,
-                          note=f"run {req['run_id']}", context={
-                              "source": _sha256_file(Path(req["strategy"]["path"])),
-                              "data": req["data"], "costs": req.get("costs"),
-                              "futures": req.get("futures"),
-                              "capital": req["initial_capital"],
-                              "data_manifest": _sha256_file(lake / "manifest.json")
-                              if (lake / "manifest.json").exists() else None})
-    n_eff = max(ledger.n_effective(), 1.0)
-    m["dsr"] = deflated_sharpe(rets.to_numpy(), n_trials=n_eff).annualized()
-    m["trials_recorded"] = ledger.n_trials()
-    m["trials_effective"] = n_eff
-    m["trial_hash"] = trial
+    _record_trial(req, strategy, rets, lake, m, diag)
     m["equity_sha256"] = equity_hash(res.equity)
     eq = pd.DataFrame({"date": panel.sessions, "equity": res.equity, "cash": res.cash,
                        "gross_exposure": np.nan, "n_positions": (res.positions != 0).sum(axis=1),

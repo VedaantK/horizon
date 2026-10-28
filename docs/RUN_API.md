@@ -31,7 +31,7 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
             "use_prior_quoted_spread": true, "borrow_bps": 50.0, "min_trade_bps": 0.0},
   "liquidity": {"participation": 0.10, "impact_coef": 1.0, "max_impact_bps": 500,
                 "window": 20, "min_obs": 10},
-  "validation": {"program": "my_idea", "placebo": 0, "lookahead_cuts": 3},
+  "validation": {"program": "my_idea", "placebo": 0, "lookahead_cuts": 3, "dsr_min": 0.95},
   "lockbox": {"unlock_reason": null},
   "report": false
 }
@@ -71,6 +71,10 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
   engine stops agreeing with the reference, with each engine's state and fills there.
 - `validation.program` names the trial ledger. Every run is recorded in it, and the deflated
   Sharpe counts all trials in the program. Use one program per research question.
+- `validation.dsr_min` (default 0.95) is the deflated Sharpe check's pass mark, in (0, 1).
+  A failed check is a research verdict, not a run failure: `status` stays `ok`, the metrics
+  stay valid, and `diagnostics.warnings` says why it failed. Deciding what to do with a
+  failing strategy is up to the caller.
 - `engines`: a result counts only when engines agree; a single engine is allowed for
   exploration and is flagged in `diagnostics.warnings`.
 
@@ -118,6 +122,7 @@ rate is subtracted.
 | `crash_protection` | stock runs: the month-end 200-day S&P rule (SEMANTICS "Crash protection"): `share_protected`, `switches`, and per safe asset (`tbills`, `bonds`) `cagr`/`vol`/`sharpe`/`max_drawdown` plus the S&P 500 under the same rule (`benchmark`) |
 | `orders` | stop / take-profit exits (at the open and intraday), limit entries placed and filled |
 | `dsr` | deflated Sharpe ratio using the ledger's effective number of trials |
+| `dsr_check` | `passed` (DSR >= `threshold`, from `validation.dsr_min`), `threshold`, `dsr`, and a one-line `reason` |
 | `trials_recorded`, `trials_effective` | trials in this ledger program |
 | `placebo_p_value` | share of random-selection portfolios with Sharpe >= this one |
 | `equity_sha256` | fingerprint of the equity curve (1e-6), for reproduction checks |

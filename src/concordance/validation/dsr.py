@@ -81,6 +81,20 @@ def deflated_sharpe(returns, n_trials: float, var_sharpe: float | None = None) -
                      skew, kurt)
 
 
+DSR_MIN = 0.95  # Bailey & López de Prado's 95% confidence that the true Sharpe beats the noise
+
+
+def dsr_check(result: DSRResult, threshold: float = DSR_MIN, periods: int = 252) -> dict:
+    """Pass/fail verdict on a DSR: does the Sharpe clear the best of `n_trials` noise trials
+    with `threshold` confidence? A verdict, not a run failure: metrics stay valid either way."""
+    a = result.annualized(periods)
+    passed = bool(result.dsr >= threshold)
+    reason = (f"DSR {result.dsr:.3f} {'>=' if passed else '<'} {threshold}: annual Sharpe "
+              f"{a['sharpe']:.2f} vs a noise ceiling of {a['noise_ceiling']:.2f} from "
+              f"{result.n_trials:.1f} effective trials")
+    return {"passed": passed, "threshold": threshold, "dsr": result.dsr, "reason": reason}
+
+
 def effective_independent_trials(trial_returns) -> float:
     """Participation ratio (Σλ)²/Σλ² of the trials' return correlation matrix.
 
