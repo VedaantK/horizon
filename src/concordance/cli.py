@@ -168,6 +168,14 @@ def cmd_reproduce(a):
     _done(0 if out["reproduced"] else 1)
 
 
+def cmd_deflate(a):
+    from concordance.api import deflate_runs
+
+    out = deflate_runs(a.run_dirs, a.dsr_min)
+    print(json.dumps(out, indent=2, default=str))
+    _done(0)
+
+
 def cmd_diagnose(a):
     from concordance.diagnose import diagnose, render
 
@@ -379,6 +387,12 @@ def main(argv=None):
     s.add_argument("run_dir")
     s.add_argument("-o", "--output")
     s.set_defaults(fn=cmd_reproduce)
+
+    s = sub.add_parser("deflate", help="deflated Sharpe check across saved runs a choice "
+                       "was made from (JSON)")
+    s.add_argument("run_dirs", nargs="+")
+    s.add_argument("--dsr-min", type=float, default=0.95, help="pass mark in (0, 1)")
+    s.set_defaults(fn=cmd_deflate)
 
     s = sub.add_parser("diagnose", help="rerun a saved run's engines; show where they differ")
     s.add_argument("run_dir")

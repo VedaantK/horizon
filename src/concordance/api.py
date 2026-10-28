@@ -738,6 +738,41 @@ def _evaluate_futures(req, panel, strategy, sched, out, lake, log, diag) -> dict
     return {"status": "ok", "metrics": m, "artifacts": artifacts, "diagnostics": diag}
 
 
+def run_returns(run_dir: str | Path) -> pd.Series:
+    """A saved ok run's evaluated daily returns, as `_evaluate` deflated them."""
+    run_dir = Path(run_dir)
+    res = json.loads((run_dir / "result.json").read_text())
+    if res.get("status") != "ok":
+        raise ValueError(f"{run_dir}: status {res.get('status')!r}, not ok")
+    eq = pd.read_parquet(run_dir / "equity.parquet").set_index("date")["equity"]
+    eq.index = pd.to_datetime(eq.index)
+    r = eq.pct_change().fillna(0.0)
+    first = max(eq.index.get_loc(pd.Timestamp(res["metrics"]["start"])), 1)
+    return r.iloc[first:]
+
+
+def deflate_runs(run_dirs, dsr_min: float = 0.95) -> dict:
+    """Deflate each run's Sharpe by the runs given together: the set a choice was made from
+    (e.g. one research run per candidate version). The ledger counts every run in a
+    program; this counts only the alternatives actually competing for selection."""
+    from concordance.validation.dsr import deflated_sharpe, dsr_check, effective_independent_trials
+
+    if not 0 < dsr_min < 1:
+        raise ValueError("dsr_min must be in (0, 1)")
+    rets = {str(d): run_returns(d) for d in run_dirs}
+    if not rets:
+        raise ValueError("no runs given")
+    m = pd.DataFrame(rets)
+    # Same rule as the ledger: too little shared history cannot establish correlation.
+    n_eff = (float(m.shape[1]) if len(m.dropna()) < 60
+             else max(effective_independent_trials(m.to_numpy()), 1.0))
+    runs = []
+    for d, r in rets.items():
+        res = deflated_sharpe(r.to_numpy(), n_trials=n_eff)
+        runs.append({"run_dir": d, **res.annualized(), **dsr_check(res, dsr_min)})
+    return {"n_trials": m.shape[1], "n_effective": n_eff, "dsr_min": dsr_min, "runs": runs}
+
+
 def reproduce(run_dir: str | Path, output_dir: str | Path | None = None) -> dict:
     """Re-run a saved run from its own request.json and strategy.py copy and compare."""
     run_dir = Path(run_dir).resolve()

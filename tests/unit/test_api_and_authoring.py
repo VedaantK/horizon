@@ -98,6 +98,33 @@ def test_dsr_check_is_a_verdict_not_a_failure(panel, tmp_path):
         assert run(bad, "bad")["status"] == "invalid_request"
 
 
+def test_deflate_runs_matches_the_runs_own_dsr(panel, tmp_path):
+    from concordance.api import deflate_runs
+
+    def run(days, where):
+        return run_backtest(request(panel, engines=["reference"],
+                                    strategy={"path": str(EXAMPLE),
+                                              "params": {"trend_days": days}},
+                                    validation={"program": "t", "lookahead_cuts": 0}),
+                            tmp_path / where, panel=panel)
+
+    a, b = run(60, "a"), run(30, "b")
+    # A fresh ledger per run (panel supplied), so each run's own DSR used one trial.
+    alone = deflate_runs([a["output_dir"]])
+    assert alone["n_effective"] == 1.0
+    own = a["metrics"]["dsr"]
+    assert alone["runs"][0]["sharpe"] == pytest.approx(own["sharpe"], rel=1e-12)
+    assert alone["runs"][0]["dsr"] == pytest.approx(own["dsr"], abs=1e-12)
+    assert alone["runs"][0]["sharpe"] == pytest.approx(a["metrics"]["sharpe"], rel=1e-9)
+    # Choosing between two versions raises the bar for both.
+    both = deflate_runs([a["output_dir"], b["output_dir"]])
+    assert both["n_trials"] == 2 and 1.0 <= both["n_effective"] <= 2.0
+    assert both["runs"][0]["dsr"] <= alone["runs"][0]["dsr"]
+    assert both["runs"][0]["noise_ceiling"] >= alone["runs"][0]["noise_ceiling"]
+    with pytest.raises(ValueError):
+        deflate_runs([a["output_dir"]], dsr_min=1.0)
+
+
 def test_static_check_flags_private_access_and_io():
     errs, _ = static_check("import os\nx = view._panel\nimport pandas as pd\n"
                            "pd.read_csv('f')\nSTRATEGY = 1\n")

@@ -67,6 +67,12 @@ Only `strategy.path`, `data.start` and `data.end` are required. Unknown fields a
 - `horizon capabilities` prints, as JSON, what can be tested: view fields, weight
   limits, which orders are long-only, cost defaults, the lake's datasets and what is not
   supported. Coordinators should build their instructions from it.
+- `horizon deflate RUN_DIR... [--dsr-min 0.95]` runs the deflated Sharpe check across saved
+  ok runs that a choice was made from, such as one research run per candidate version. Each
+  run's Sharpe is deflated by the effective number of runs given (correlation-adjusted). It
+  prints `n_trials`, `n_effective` and, per run, `dsr`, `sharpe`, `noise_ceiling` (annual)
+  and the `dsr_check` fields. Use it at selection time: a run's own `dsr` counts every
+  ledger trial recorded *before* it, robustness runs included, so it depends on run order.
 - `horizon diagnose RUN_DIR` reruns a saved run's engines and shows where the first
   engine stops agreeing with the reference, with each engine's state and fills there.
 - `validation.program` names the trial ledger. Every run is recorded in it, and the deflated
