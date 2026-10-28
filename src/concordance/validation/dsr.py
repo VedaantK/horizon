@@ -28,7 +28,11 @@ def expected_max_sharpe(n_trials: float, var_sharpe: float, mean_sharpe: float =
         return mean_sharpe
     z1 = stats.norm.ppf(1.0 - 1.0 / n)
     z2 = stats.norm.ppf(1.0 - 1.0 / (n * np.e))
-    return float(mean_sharpe + np.sqrt(var_sharpe) * ((1 - EULER_GAMMA) * z1 + EULER_GAMMA * z2))
+    # The extreme-value approximation dips below the mean for n just above 1 (-0.48 sd at
+    # n = 1.05), which would make a near-duplicate trial *lower* the bar. The best of
+    # n >= 1 trials is never expected below one trial's mean.
+    return float(mean_sharpe + np.sqrt(var_sharpe)
+                 * max((1 - EULER_GAMMA) * z1 + EULER_GAMMA * z2, 0.0))
 
 
 def probabilistic_sharpe(sr: float, sr_benchmark: float, T: int, skew: float,

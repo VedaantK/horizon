@@ -50,6 +50,17 @@ def test_dsr_check_on_the_paper_example():
     assert dsr_check(d, 0.90, periods=250)["passed"]
 
 
+def test_noise_ceiling_never_drops_below_one_trial():
+    # Effective trial counts just above 1 (near-duplicate versions) used to give a negative
+    # ceiling: at n = 1.05, 0.4228 * ppf(0.0476) + 0.5772 * ppf(0.6496) = -0.705 + 0.222.
+    ns = [1, 1.01, 1.05, 1.2, 1.5, 2, 3, 10, 100]
+    ceilings = [expected_max_sharpe(n, 0.01) for n in ns]
+    assert all(c >= 0.0 for c in ceilings)
+    assert ceilings == sorted(ceilings)
+    # Unchanged where the approximation is valid: n = 2 -> 0.5772 * ppf(1 - 1/(2e)) * 0.1.
+    assert expected_max_sharpe(2, 0.01) == pytest.approx(0.05772 * 0.9005, abs=1e-5)
+
+
 def test_dsr_extreme_moments_fail_closed():
     # 1 - skew*sr + (k-1)/4*sr^2 <= 0 -> probability 0 (QuantMega inflated z here).
     assert probabilistic_sharpe(0.5, 0.0, 1000, skew=10.0, kurt=1.0) == 0.0
