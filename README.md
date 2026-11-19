@@ -98,5 +98,5 @@ minute-bar interface; the daily `backtest` request and three-engine contract abo
 unchanged. Minute execution reconciles a reference event loop with an independent
 replay loop. It requires prior-minute NBBO quotes and volume, supports long and short
 stops/targets, resolves same-minute stop/target ambiguity against the trade, and exits
-positions at each asset's last regular-session bar. See the sibling
-`/home/vkulk/tide` repository for the data contract and research workflow.
+positions at each asset's last regular-session bar. The data contract and research
+workflow live in a separate (private) intraday research repository.

@@ -24,8 +24,7 @@ exact export bytes. This attestation needs a real review of vendor documentation
 sample source records. Filling in a JSON form is not proof of historical availability.
 
 ```sh
-PYTHONPATH=/home/vkulk/horizon-review/src \
-  /home/vkulk/horizon/.venv/bin/python -m concordance.data.first_reported \
+uv run python -m concordance.data.first_reported \
   EXPORT.parquet REVIEW.json NEW_STAGING_DIRECTORY --cutoff 2019-12-31
 ```
 
