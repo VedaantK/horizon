@@ -2,6 +2,13 @@
 
 **A backtest result counts only when independent engines agree.**
 
+Most backtests that look great are wrong, usually because of a subtle bug: the strategy quietly
+uses information it couldn't have had yet, stocks that went bankrupt are missing from the history,
+or trading costs are ignored. Horizon is built so those mistakes show up instead of becoming
+fake returns. The same strategy runs on independently written engines, and the result is rejected
+unless every fill, position and dollar of cash matches. Every result on my
+[research desk](https://vedaantk.github.io/research-desk/) was produced this way.
+
 Horizon runs every strategy through three engines and accepts the result only if
 their fills, positions, cash and equity reconcile:
 
